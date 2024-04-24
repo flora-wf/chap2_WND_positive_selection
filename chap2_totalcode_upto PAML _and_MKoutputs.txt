@@ -1,0 +1,3817 @@
+#FULL CODE FOR CHAPTER 2 OF FLORA WHITING-FAWCETT'S PHD THESIS AT THE UNIVERSITY OF LIVERPOOL
+#SETTING DIRECTORIES AND GETTING SEQUENCES
+mkdir ~/Datafiles/Bats/myoluc
+mkdir ~/Datafiles/Bats/myoluc/indvs
+mkdir ~/Datafiles/Bats/myoluc/ref
+
+# setting_up_directories_myobra
+mkdir ~/Datafiles/Bats/myobra/
+mkdir ~/Datafiles/Bats/myobra/indvs
+mkdir ~/Datafiles/Bats/myobra/ref
+
+#copying-myoluc-individuals
+#move into Steve's directory for bams of myoluc mapped to myoluc reference genome, this is the first layer of the directory. These are located here: ~stevep11/Datafiles/Bats/myoluc/indvs/bams
+#individual reads were copied from Victoria Tworts datafilee
+
+#copying-myoluc-reference-and-gff from /pub34/stevep11/Datafiles/Bats/myoluc/ref
+cp myoluc2.0.fa ~/Datafiles/Bats/myoluc/ref/.
+cp myoluc2.0.fa.fai ~/Datafiles/Bats/myoluc/ref/
+cp ensembl/Myotis_lucifugus.Myoluc2.0.93.gff3.gz ~/Datafiles/Bats/myoluc/ref/
+
+#copying myobra individuals
+#these are located in Steve's directory here: stevep11/Datafiles/Bats/brandtii/reads
+#reference and gff for myobra are found here: stevep11/Datafiles/Bats/brandtii/ref
+
+
+#MAPPING MYOBRA TO THE MYOMYO REFERENCE GENOME
+#CHANGE READ LOCATION AND SAMPLE AS APPROPRIATE
+~/Datafiles/Bats/myobra/indvs$ mkdir ~/Datafiles/Bats/myobra/indvs/23.02.21_remapping_to_Mmyo
+
+mkdir ~/Datafiles/Bats/myomyo
+cd ~/Datafiles/Bats/myomyo
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/014/108/235/GCF_014108235.1_mMyoMyo1.p/GCF_014108235.1_mMyoMyo1.p_genomic.fna.gz
+gunzip *
+
+#going to set running on ada10, so dont use up all the cpu on watt26
+
+bowtie2-build GCF_014108235.1_mMyoMyo1.p_genomic.fna GCF_014108235.1_mMyoMyo1.p_genomic.fna 
+
+#change this to something that works for you
+workdir=$HOME/Datafiles/Bats/myobra
+
+#indvs
+readdir1=$HOME/Datafiles/Bats/myobra/indvs
+
+#hopefully you can read this from my directory. It's the genome reference
+ref=$HOME/Datafiles/Bats/myomyo/GCF_014108235.1_mMyoMyo1.p_genomic.fna
+
+mkdir -p $workdir/indvs/23.02.21_remapping_to_Mmyo/bams
+mkdir -p $workdir/indvs/23.02.21_remapping_to_Mmyo/logs
+
+#the reads that you'll use
+#example for samp 1 - code for the screens for other samples under myobra_mapping_indv_raw_reads_to_reference.sh
+R1=$workdir/indvs/1-1_ind_ger_25591_ATTACTCG-AGGCTATA_L004_R1_001.fastq
+R2=$workdir/indvs/1-1_ind_ger_25591_ATTACTCG-AGGCTATA_L004_R2_001.fastq
+
+scratchdir=/scratch/flora
+samp=Sample_1
+#everywhere below that you see $samp or ${samp} it's subsituting Sample_2
+
+mkdir $scratchdir
+
+#does the mapping and sends through samtools into an unsorted bam file. It takes a while.
+bowtie2 -x $ref --sensitive-local -p 64 -1 $R1 -2 $R2 | samtools view -b - -o $scratchdir/1.${samp}.bam
+
+#sort the bamfile by genome coordinate #added -o to specify output file
+samtools sort $scratchdir/1.${samp}.bam -o $scratchdir/2.${samp}.bam
+
+#get some stats on the mapping #takes abt 2 mins,
+samtools flagstat $scratchdir/2.${samp}.bam > $workdir/indvs/23.02.21_remapping_to_Mmyo/logs/${samp}.flagstat &
+
+#I'm nt sure the next line is even needed. gets some information on the bam file sorted before running GATK
+#I=input.bam, O=output.bam, RGID=read group ID (sample number), RGLB= read group library (sample number), RGPL= read group platform (eg illumina), RGPU= Read groupp platform unit (sample number), RGSM= read group sample name (sample number)
+java -jar ~/anaconda3/envs/mapping/bin/picard.jar AddOrReplaceReadGroups I=$scratchdir/2.${samp}.bam O=$scratchdir/3.${samp}.bam RGID=${samp} RGLB=${samp} RGPL=Illumina RGSM=${samp} RGPU=${samp}
+
+#gets rid of any duplicated reads, eg PCR duplicates
+java -Xmx5000M -jar ~/anaconda3/envs/mapping/bin/picard.jar MarkDuplicates INPUT=$scratchdir/3.${samp}.bam OUTPUT=$workdir/indvs/23.02.21_remapping_to_Mmyo/bams/${samp}.rmdup.bam METRICS_FILE=$workdir/indvs/23.02.21_remapping_to_Mmyo/logs/${samp}.rmdupMetrics.txt REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=LENIENT MAX_FILE_HANDLES_FOR_READ_ENDS_MAP=1000
+#then index
+samtools index $workdir/indvs/23.02.21_remapping_to_Mmyo/bams/${samp}.rmdup.bam
+#end for first indv
+
+
+#MAPPING MYOLUC TO THE MYOMYO REFERENCE GENOME
+#CHANGE READ LOCATION AND SAMPLE AS APPROPRIATE
+cd ~/Datafiles/Bats/myoluc/indvs/
+mkdir remapping_myomyo
+cd remapping_myomyo/
+mkdir bams
+mkdir bamstats
+mkdir coverage
+mkdir logs
+mkdir vcfs
+
+
+#1st indvs
+
+#activating anaconda environment
+export PATH=$HOME/anaconda3/bin:$PATH
+source activate base
+conda activate mapping
+
+#setting names
+workdir=$HOME/Datafiles/Bats/myoluc/indvs/remapping_myomyo
+readdir1=$HOME/Datafiles/Bats/myoluc/indvs
+ref=$HOME/Datafiles/Bats/myomyo/GCF_014108235.1_mMyoMyo1.p_genomic.fna
+cd $workdir
+
+R1=$readdir1/1-602849_CTGAAGCT-ACGTCCTG_L007_R1.fastq 
+R2=$readdir1/1-602849_CTGAAGCT-ACGTCCTG_L007_R2.fastq 
+
+scratchdir=/scratch/flora
+samp=Sample_1
+mkdir $scratchdir
+
+#mapping raw reads to reference genome - sends through samtools to an unsorted bam file
+bowtie2 -x $ref --sensitive-local -p 64 -1 $R1 -2 $R2 | samtools view -b - -o $scratchdir/1.${samp}.bam
+
+#sort the bamfile by genome coordinate #added -o to specify output file
+samtools sort $scratchdir/1.${samp}.bam -o $scratchdir/2.${samp}.bam
+
+#get some stats on the mapping #takes abt 2 mins,
+samtools flagstat $scratchdir/2.${samp}.bam > $workdir/logs/${samp}.flagstat &
+
+#I'm nt sure the next line is even needed. gets some information on the bam file sorted before running GATK
+#I=input.bam, O=output.bam, RGID=read group ID (sample number), RGLB= read group library (sample number), RGPL= read group platform (eg illumina), RGPU= Read groupp platform unit (sample number), RGSM= read group sample name (sample number)
+java -jar ~/anaconda3/envs/mapping/bin/picard.jar AddOrReplaceReadGroups I=$scratchdir/2.${samp}.bam O=$scratchdir/3.${samp}.bam RGID=${samp} RGLB=${samp} RGPL=Illumina RGSM=${samp} RGPU=${samp}
+
+#gets rid of any duplicated reads, eg PCR duplicates
+java -Xmx5000M -jar ~/anaconda3/envs/mapping/bin/picard.jar MarkDuplicates INPUT=$scratchdir/3.${samp}.bam OUTPUT=$workdir/bams/${samp}.rmdup.bam METRICS_FILE=$workdir/logs/${samp}.rmdupMetrics.txt REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=LENIENT MAX_FILE_HANDLES_FOR_READ_ENDS_MAP=1000
+#then index
+samtools index $workdir/bams/${samp}.rmdup.bam
+#end for first indv
+
+
+#VARIANT CALLING
+#gatk SNP calling script
+#make sure you have a index file for your ref genome
+samtools faidx $ref
+
+#call SNPs in individuals 
+#HaplotypeCaller exists in gatk-package-4.1.4.0-local.jar (on my machine, may be different version for yours)
+#set gatk as a command with 
+export PATH="~/anaconda3/envs/mapping/bin/gatk-4.1.4.0/:$PATH"
+
+#set $ref for reference genome (change as suitable)
+ref=$HOME/Datafiles/Bats/myomyo/GCF_014108235.1_mMyoMyo1.p_genomic.fna
+#make sure you have a index file fo ryou ref genome
+#samtools faidx $ref
+#create sequence dictionary
+java -jar ~/anaconda3/envs/mapping/bin/picard.jar CreateSequenceDictionary R= $ref O= $HOME/Datafiles/Bats/myomyo/GCF_014108235.1_mMyoMyo1.p_genomic.dict
+
+#set working directory $workdir for file location (change as suitable)
+workdir=$HOME/Datafiles/Bats/myobra
+
+#make sure you have a vcfs folder to put your output into
+#mkdir $workdir/indvs/23.02.21_remapping_to_Mmyo/vcfs/
+
+#export PATH="~/anaconda3/envs/mapping/bin/gatk-4.1.4.0/:$PATH"
+#call SNPs in individuals
+gatk HaplotypeCaller -R $ref \
+-I ${workdir}/indvs/23.02.21_remapping_to_Mmyo/bams/Sample_1.rmdup.bam \
+-I ${workdir}/indvs/23.02.21_remapping_to_Mmyo/bams/Sample_2.rmdup.bam \
+-I ${workdir}/indvs/23.02.21_remapping_to_Mmyo/bams/Sample_4.rmdup.bam \
+-I ${workdir}/indvs/23.02.21_remapping_to_Mmyo/bams/Sample_5.rmdup.bam \
+-O ${workdir}/indvs/23.02.21_remapping_to_Mmyo/vcfs/combined.indv.v1.vcf
+
+pigz -p 32 ${workdir}/indvs/23.02.21_remapping_to_Mmyo/vcfs/combined.indv.v1.vcf
+#gatk SNP calling script
+
+#call SNPs in individuals 
+#HaplotypeCaller exists in gatk-package-4.1.4.0-local.jar (on my machine, may be different version for yours)
+#set gatk as a command with 
+export PATH="~/anaconda3/envs/mapping/bin/gatk-4.1.4.0/:$PATH"
+
+#set $ref for reference genome (change as suitable)
+ref=$HOME/Datafiles/Bats/myomyo/GCF_014108235.1_mMyoMyo1.p_genomic.fna
+
+#set working directory $workdir for file location (change as suitable)
+workdir=$HOME/Datafiles/Bats/myoluc/indvs/remapping_myomyo
+
+gatk HaplotypeCaller -R $ref \
+-I ${workdir}/bams/Sample_1.rmdup.bam \
+-I ${workdir}/bams/Sample_2.rmdup.bam \
+-I ${workdir}/bams/Sample_3.rmdup.bam \
+-I ${workdir}/bams/Sample_4.rmdup.bam \
+-I ${workdir}/bams/Sample_6.rmdup.bam \
+-I ${workdir}/bams/Sample_8.rmdup.bam \
+-O ${workdir}/vcfs/combined.indv.v1.vcf 
+
+pigz -p 32 ${workdir}/vcfs/combined.indv.v1.vcf
+
+#further notes: I think initially the individual calling was looped but that didn't work for me so I just wrote them all out manually
+#the pigz command (largely used for compressing files) was given to me in this order, and is supposed to parallelise the threads (limited to 32) so the process runs faster, but I'm unconvinced it's actually doing anything in this case?
+
+
+##big file, rerunning everything with the GCF reference genome (orthofinder w 1k bats, MESPA with the myomyo ortholog sequences, muscle alignments)
+
+#create directory for all of this to go into
+mkdir ~/Datafiles/Bats/GCF_rerun_0821
+cd ~/Datafiles/Bats/GCF_rerun_0821
+
+#make directory for the ncbi versions of the 5 remaining bat1k bats
+mkdir ncbi_5bats
+cd ncbi_5bats
+
+#rhifer
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/004/115/265/GCF_004115265.1_mRhiFer1_v1.p/GCF_004115265.1_mRhiFer1_v1.p_genomic.fna.gz
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/004/115/265/GCF_004115265.1_mRhiFer1_v1.p/GCF_004115265.1_mRhiFer1_v1.p_genomic.gff.gz
+
+#molmol
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/014/108/415/GCF_014108415.1_mMolMol1.p/GCF_014108415.1_mMolMol1.p_genomic.fna.gz
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/014/108/415/GCF_014108415.1_mMolMol1.p/GCF_014108415.1_mMolMol1.p_genomic.gff.gz
+
+#phydis
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/004/126/475/GCF_004126475.2_mPhyDis1.pri.v3/GCF_004126475.2_mPhyDis1.pri.v3_genomic.fna.gz
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/004/126/475/GCF_004126475.2_mPhyDis1.pri.v3/GCF_004126475.2_mPhyDis1.pri.v3_genomic.gff.gz
+
+#rouaeg
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/014/176/215/GCF_014176215.1_mRouAeg1.p/GCF_014176215.1_mRouAeg1.p_genomic.fna.gz
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/014/176/215/GCF_014176215.1_mRouAeg1.p/GCF_014176215.1_mRouAeg1.p_genomic.gff.gz
+
+#pipkuh
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/014/108/245/GCF_014108245.1_mPipKuh1.p/GCF_014108245.1_mPipKuh1.p_genomic.fna.gz
+curl -O https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/014/108/245/GCF_014108245.1_mPipKuh1.p/GCF_014108245.1_mPipKuh1.p_genomic.gff.gz
+
+gunzip *
+#allowing permissions for user
+chmod u+x *
+
+#grep out CDS from the gff files
+grep $'\tCDS\t' GCF_004115265.1_mRhiFer1_v1.p_genomic.gff > rhiFer_CDS.gff
+grep $'\tCDS\t' GCF_014108415.1_mMolMol1.p_genomic.gff > molMol_CDS.gff
+grep $'\tCDS\t' GCF_004126475.2_mPhyDis1.pri.v3_genomic.gff > phyDis_CDS.gff
+grep $'\tCDS\t' GCF_014176215.1_mRouAeg1.p_genomic.gff > rouAeg_CDS.gff
+grep $'\tCDS\t' GCF_014108245.1_mPipKuh1.p_genomic.gff > pipKuh_CDS.gff
+
+#getting out the CDS protein sequences with gffread
+conda activate mapping
+gffread rhiFer_CDS.gff -g GCF_004115265.1_mRhiFer1_v1.p_genomic.fna -V -H -B -N -S -y rhiFer_AA.fa -S
+gffread molMol_CDS.gff -g GCF_014108415.1_mMolMol1.p_genomic.fna -V -H -B -N -S -y molMol_AA.fa -S
+gffread phyDis_CDS.gff -g GCF_004126475.2_mPhyDis1.pri.v3_genomic.fna -V -H -B -N -S -y phyDis_AA.fa -S
+gffread rouAeg_CDS.gff -g GCF_014176215.1_mRouAeg1.p_genomic.fna -V -H -B -N -S -y rouAeg_AA.fa -S
+gffread pipKuh_CDS.gff -g GCF_014108245.1_mPipKuh1.p_genomic.fna -V -H -B -N -S -y pipKuh_AA.fa -S
+
+
+###################---------orthofinder--------------------------------------------------------------------------------------------------##################################
+#need to run the R script that extracts the longest scaffold for each (in coding_files/gff_wrangling)
+#need to create a trimmed version for each of the full GFFs (not just the CDS only ones), that does not have the # descriptor lines
+#grep -v '#' GCF___filename > sppNam_trimmed_whole.gff
+
+cd ~/Datafiles/Bats/GCF_rerun_0821/ncbi_5bats
+grep -v '#' GCF_004115265.1_mRhiFer1_v1.p_genomic.gff > rhiFer_trimmed_whole.gff
+grep -v '#' GCF_004126475.2_mPhyDis1.pri.v3_genomic.gff > phyDis_trimmed_whole.gff
+grep -v '#' GCF_014108245.1_mPipKuh1.p_genomic.gff > pipKuh_trimmed_whole.gff
+grep -v '#' GCF_014108415.1_mMolMol1.p_genomic.gff > molMol_trimmed_whole.gff
+grep -v '#' GCF_014176215.1_mRouAeg1.p_genomic.gff > rouAeg_trimmed_whole.gff
+cd ../../myomyo/
+grep -v '#' GCF_014108235.1_mMyoMyo1.p_genomic.gff > myoMyo_trimmed_whole.gff
+
+#need to make index files for the protein.fa files, need to run separately
+samtools faidx molMol_AA.fa
+samtools faidx phyDis_AA.fa
+samtools faidx pipKuh_AA.fa
+samtools faidx rhiFer_AA.fa
+samtools faidx rouAeg_AA.fa
+cd ../../myomyo/prot
+samtools faidx GCF_myomyo_prot_genome.faa
+
+#run R script to get the longest transcript out 
+#transfer over tsv files created by the fixed R script, and put in long_transcript_variant
+mkdir ~/Datafiles/Bats/GCF_rerun_0821/ncbi_5bats/long_transcript_variants
+cd ~/Datafiles/Bats/GCF_rerun_0821/ncbi_5bats/long_transcript_variants
+seqtk subseq ../molMol_AA.fa strict_molMol_genome_mRNA.tsv > molMol_trimmed_AA.fa
+seqtk subseq ../../../myomyo/prot/GCF_myomyo_prot_genome.faa strict_myoMyo_genome_mRNA.tsv > myoMyo_trimmed_AA.fa
+seqtk subseq ../phyDis_AA.fa strict_phyDis_genome_mRNA.tsv > phyDis_trimmed_AA.fa
+seqtk subseq ../pipKuh_AA.fa strict_pipKuh_genome_mRNA.tsv > pipKuh_trimmed_AA.fa
+seqtk subseq ../rhiFer_AA.fa strict_rhiFer_genome_mRNA.tsv > rhiFer_trimmed_AA.fa
+seqtk subseq ../rouAeg_AA.fa strict_rouAeg_genome_mRNA.tsv > rouAeg_trimmed_AA.fa
+
+#setup for orthofinder
+cd ../../orthofinder
+mkdir 14Sep21_strict
+cp ../ncbi_5bats/long_transcript_variants/*.fa 14Sep21_strict/.
+cd 14Sep21_strict
+
+#run primary transcript thing
+for f in *.fa ; do python ~/orthofinder_tutorial/OrthoFinder/tools/primary_transcript.py $f ; done
+
+#change fa files so they have the spp names in front of their transcripts for easy id
+cd primary_transcripts
+sed -i 's/>/>molMol_/' molMol_trimmed_AA.fa  
+sed -i 's/>/>phyDis_/' phyDis_trimmed_AA.fa 
+sed -i 's/>/>rhiFer_/' rhiFer_trimmed_AA.fa 
+sed -i 's/>/>rouAeg_/' rouAeg_trimmed_AA.fa 
+sed -i 's/>/>myoMyo_/' myoMyo_trimmed_AA.fa 
+sed -i 's/>/>pipKuh_/' pipKuh_trimmed_AA.fa 
+cd ..
+
+#start orthofinder
+
+/pub38/kayussky/anaconda3/bin/orthofinder -f primary_transcripts -t 64
+
+#SGOs: 10,121
+
+#--------------------------------------------MESPA----------------------------------------------------------------------------------------------------------------
+#cd ..
+mkdir mespa
+
+#pull out the myotis myotis 
+cd ~/Datafiles/Bats/GCF_rerun_0821/orthofinder/14Sep21_strict/primary_transcripts/OrthoFinder/Results_Sep16/Single_Copy_Orthologue_Sequences/
+touch myoMyo_SGOs.fa
+for file in *.fa; do
+	awk '/>myoMyo/{p++;print;next} /^>/{p=0} p' "$file" | cat >> myoMyo_SGOs.fa
+done
+
+#move proteins file to the mespa folder
+mv ~/Datafiles/Bats/GCF_rerun_0821/orthofinder/14Sep21_strict/primary_transcripts/OrthoFinder/Results_Sep16/Single_Copy_Orthologue_Sequences/myoMyo_SGOs.fa myoMyo_SGOs.fa
+#get out the accession names
+grep '>' myoMyo_SGOs.fa > myoMyo_protein_names.txt
+#remove the > out of the accession names
+sed -i 's/^.//' myoMyo_protein_names.txt
+
+#in mespa environment, run MESPA_myobra.txt and MESPA_myoluc.txt
+#myoluc genes: 7842
+#myobra genes: 8340
+
+#mespa running file
+#STEP 1
+#set protein reference file and genome fasta file, with name code
+#DO NOT PUT AN _ IN CODE NAME
+code="myoBra"
+#genome fasta
+genome="$HOME/Datafiles/Bats/myobra/ref/GCF_000412655.1_ASM41265v1_genomic.fna"
+#reference proteins
+proteins="$HOME/Datafiles/Bats/GCF_rerun_0821/mespa/myoMyo_SGOs.fa"
+#new directory name
+dir="${code}"
+#control file, with configures with paths to your spaln scripts
+config="/pub36/florawf/mespa_testing/scripts/mespa_v1_rackham.cfg"
+#make directory for this MESPA run for this particular shit genome
+mkdir $dir
+#enter directory
+cd $dir
+
+#run MESPA
+python /pub36/florawf/mespa_testing/scripts/mespa_v1.3.py -a $genome -p $proteins -s $config -c 4
+
+#sorting through MESPA 
+#STEP 2
+
+#set names
+code="myoBra"
+dir="${code}"
+cds_outfile1="${code}_Bmor.CDS.fa"
+cds_outfile2="${code}_Bmor_contig.CDS.fa"
+cds_outfile3="${code}_Bmor.CDS.nostops.fa"
+cds_outfile4="${code}_Bmor_contig.CDS.nostops.fa"
+cds_outfile5="${code}_Bmor.CDS.nostops.linear.fa"
+cds_outfile6="${code}_Bmor_contig.CDS.nostops.linear.fa"
+prot_outfile1="${code}_Bmor.prot.fa"
+prot_outfile2="${code}_Bmor_contig.prot.fa"
+prot_outfile3="${code}_Bmor.prot.nostops.fa"
+prot_outfile4="${code}_Bmor_contig.prot.nostops.fa"
+lookup1="${code}_Bmor_scaffold_lookup_table.csv"
+lookup2="${code}_Bmor_contig_lookup_table.csv"
+list1="${code}_Bmor_scaffold_to_be_removed_CDS.txt"
+list2="${code}_Bmor_contig_to_be_removed_CDS.txt"
+prot_location="${dir}/amino"
+nuc_location="${dir}/nucleotide"
+
+#make subdirectories in mespa sample directory
+cd $dir
+mkdir nucleotide
+mkdir amino
+mkdir amino/by_gene
+mkdir nucleotide/by_gene
+mkdir nucleotide/by_gene/renamed
+mkdir amino/by_gene/renamed
+
+#now doing everything twice to process rescaffolded genes (scaffolds) and those that are not rescaffolded (contigs)
+#Process gff file to remove contig entries - ##get the noncontig entries out
+grep -v 'contig' scaffolds.gff > scaffolds_nocontig.gff
+#Extract contig entries from gff file
+grep 'contig' scaffolds.gff > scaffolds_contig.gff
+
+#Extract sequences from scaffolds gff and count these #${code}_Bmor.CDS.fa"
+gffread scaffolds_nocontig.gff -g onlygenemodels.fa -x "$cds_outfile1" -y "$prot_outfile1"
+#prints command to slurm file
+echo -e "Number retrived from $cds_outfile1: "
+#counts number of entries in new seq file
+grep -c '>' $cds_outfile1
+##10016
+#Extract sequences from contig gff and count
+gffread scaffolds_contig.gff -g remaining_contigs.fa -x "$cds_outfile2" -y "$prot_outfile2"
+#FASTA index file remaining_contigs.fa.fai created.
+echo -e "Number retrived from $cds_outfile2: "
+grep -c '>' $cds_outfile2
+##136
+
+
+#Process scaffold fa to remove those with internal stops and count #"${code}_Bmor.CDS.nostops.fa"
+awk '/^>/ {printf("%s%s\t",(N>0?"\n":""),$0);N++;next;} {printf("%s",$0);} END {printf("\n");}' $prot_outfile1 | awk -F '\t'  '!($2 ~ /\./)' |  tr "\t" "\n" > $prot_outfile3
+echo -e "Number retrived from $prot_outfile3:"
+#count how many genes remain
+grep -c '>' $prot_outfile3
+##8325
+#Process contig fa to remove those with internal stops and count
+awk '/^>/ {printf("%s%s\t",(N>0?"\n":""),$0);N++;next;} {printf("%s",$0);} END {printf("\n");}' $prot_outfile2 | awk -F '\t'  '!($2 ~ /\./)' |  tr "\t" "\n" > $prot_outfile4
+echo -e "Number retrived from $prot_outfile4:"
+grep -c '>' $prot_outfile4
+##103
+
+#Create lookup table1 for renaming mespa names to our gene names (not renaming rn, just creating table)
+awk 'BEGIN {FS="[ ; \t ]"} {if ($3 ~ /cds/) print $10, $11, $12}' scaffolds_nocontig.gff | sed -e 's/Parent=//g' -e 's/Target=//g' -e 's/Name=//g' -e 's/ /,/g' | sort | uniq > $lookup1
+#add headers to the lookup table
+echo 'mRNA_ID,scaffold_id,Bmori_ID' >> $lookup1
+sed -i '1h;1d;$!H;$!d;G' $lookup1
+echo -e "Check the top of the table for $lookup1 is ok"
+head $lookup1
+#Create lookup table2 for renaming
+awk 'BEGIN {FS="[ ; \t ]"} {if ($3 ~ /cds/) print $10, $11, $12}' scaffolds_contig.gff | sed -e 's/Parent=//g' -e 's/Target=//g' -e 's/Name=//g' -e 's/ /,/g' | sort | uniq > $lookup2
+echo 'mRNA_ID,scaffold_id,Bmori_ID' >> $lookup2
+sed -i '1h;1d;$!H;$!d;G' $lookup2
+echo -e "Check the top of the table for $lookup2"
+head $lookup2
+
+#Compare CDS file for both contigs and scaffolds and filtered protein file to generate a list of those we need to remove from CDS file
+diff <(cat $prot_outfile3 | grep -a ">" | sort)  <(cat $prot_outfile1 | grep -a ">" | sort)| grep -a "^>" | awk -F\> '{print $3}' > $list1
+diff <(cat $prot_outfile4 | grep -a ">" | sort)  <(cat $prot_outfile2 | grep -a ">" | sort)| grep -a "^>" | awk -F\> '{print $3}' > $list2
+#Remove the disguarded entries from CDS files for both scaffolds and contigs, ##using reverse grep to take those not named in the file
+awk '{ if ((NR>1)&&($0~/^>/)) { printf("\n%s", $0); } else if (NR==1) { printf("%s", $0); } else { printf("\t%s", $0); } }' $cds_outfile1 | grep -vf $list1 - | tr "\t" "\n" > $cds_outfile3
+awk '{ if ((NR>1)&&($0~/^>/)) { printf("\n%s", $0); } else if (NR==1) { printf("%s", $0); } else { printf("\t%s", $0); } }' $cds_outfile2 | grep -vf $list2 - | tr "\t" "\n" > $cds_outfile4
+
+#Count number of entries and ensure they match with the numbers above, these may differ due to how uppmax seems to process as binary files
+echo -e "Number of sequences in $cds_outfile3:"
+grep -c '>' $cds_outfile3
+##8325
+echo -e "Number of sequences in $cds_outfile4:"
+grep -c '>' $cds_outfile4
+##110
+#matched!
+
+#Make CDs fasta files linear ##previously interleaved
+sed -e 's/\(^>.*$\)/#\1#/' $cds_outfile3 | tr -d "\r" | tr -d "\n" | sed -e 's/$/#/' | tr "#" "\n" | sed -e '/^$/d' > $cds_outfile5
+sed -e 's/\(^>.*$\)/#\1#/' $cds_outfile4 | tr -d "\r" | tr -d "\n" | sed -e 's/$/#/' | tr "#" "\n" | sed -e '/^$/d' > $cds_outfile6
+
+####DOWNLOAD RENAMING SCRIPT (ON MAC) AND PLACE IN MESPA_TESTING/SCRIPTS FOLDER - done
+#Rename CDS files using the lookup tables
+/pub36/florawf/mespa_testing/scripts/rename_mespa.sh $cds_outfile5 $lookup1 $code
+/pub36/florawf/mespa_testing/scripts/rename_mespa.sh $cds_outfile6 $lookup2 $code
+#Rename protein files using the lookup tables
+/pub36/florawf/mespa_testing/scripts/rename_mespa.sh $prot_outfile3 $lookup1 $code
+/pub36/florawf/mespa_testing/scripts/rename_mespa.sh $prot_outfile4 $lookup2 $code
+
+#Copy the required files to folders for downstream processing
+cp $prot_outfile3 amino/.
+cp $prot_outfile4 amino/.
+cp $cds_outfile5 nucleotide/.
+cp $cds_outfile6 nucleotide/.
+
+##STEP 3: CONVERT NUCLEOTIDE FILES FROM A BY GENOME FORMAT TO A BY GENE FORMAT
+#separates genes that match the gene list out of the genome sequence file, and separate out into a separate gene file in the by_gene folder
+#CHECK WITH VICTORIA THAT I SHOULD BE USING THIS GENE LIST AND NOT A BESPOKE ONE - do need bespoke one
+#DOWNLOAD GENE LIST AND PLACE IN MESPA_TESTING/SCRIPTS FOLDER
+
+#23.10.21: need to remove the myobra bit before the gene, doesn't match the lookup file
+#eg $cds_outfile5 is >myoBra_myoMyo_rna-XM_ rather than myoMyo_rna-XM_
+sed -i 's/>myoBra_/>/' nucleotide/*.fa 
+sed -i 's/>myoMyo_rna_XM/>myoMyo_rna-XM/' nucleotide/*.fa 
+sed -i 's/_1/.1/' nucleotide/*.fa 
+
+#gene list should match the genes names in the file names
+list="$HOME/Datafiles/Bats/GCF_rerun_0821/mespa/myoMyo_protein_names.txt"
+while read gene
+do
+input_path="nucleotide/*.fa"
+output="nucleotide/by_gene/${gene}.fasta"
+awk 'BEGIN{RS=">"}/'${gene}'\n/{print">"$0}' $input_path > $output
+done < $list
+
+
+###STEP 4: CONVERT AMINO ACID FILES FROM A BY GENOME FORMAT TO A BY GENE FORMAT
+#23.10.21: need to remove the myobra bit before the gene, doesn't match the lookup file
+#eg $cds_outfile5 is >myoBra_myoMyo_rna-XM_ rather than myoMyo_rna-XM_
+sed -i 's/>myoBra_/>/' amino/*.fa 
+sed -i 's/>myoMyo_rna_XM/>myoMyo_rna-XM/' amino/*.fa 
+sed -i 's/_1/.1/' amino/*.fa 
+
+#repeat step three but with the amino acid files
+list="$HOME/Datafiles/Bats/GCF_rerun_0821/mespa/myoMyo_protein_names.txt"
+while read gene
+do
+input_path="amino/*.fa"
+output="amino/by_gene/${gene}.fasta"
+awk 'BEGIN{RS=">"}/'${gene}'\n/{print">"$0}' $input_path > $output
+done < $list
+
+
+###STEP 5: REMOVE BLANK FILES
+#removes files with a size of zero
+cd nucleotide/by_gene
+find -type f -size 0 -delete 
+cd ../../amino/by_gene
+find -type f -size 0 -delete
+
+
+###STEP 6: RENAME FILES
+#DOWNLOAD RENAME.PL SCRIPT (ON MAC) AND PUT IN THE MESPA_TESTING/SCRIPTS FOLDER
+#CHECK WE CAN USE PERL
+cd nucleotide/by_gene
+perl /pub36/florawf/mespa_testing/scripts/rename.pl 
+cd ../../amino/by_gene
+perl /pub36/florawf/mespa_testing/scripts/rename.pl
+
+#The files you need for alignment and downstream analysis are located in the following two folders:
+#• /nucleotide/by_gene/renamed 
+#• /amino/by_gene/renamed
+
+
+#mespa running file
+#STEP 1
+#set protein reference file and genome fasta file, with name code
+#DO NOT PUT AN _ IN CODE NAME
+code="myoLuc"
+#genome fasta
+genome="$HOME/Datafiles/Bats/myoluc/ref/myoluc2.0.fa"
+#reference proteins
+proteins="$HOME/Datafiles/Bats/GCF_rerun_0821/mespa/myoMyo_SGOs.fa"
+#new directory name
+dir="${code}"
+#control file, with configures with paths to your spaln scripts
+config="/pub36/florawf/mespa_testing/scripts/mespa_v1_rackham.cfg"
+#make directory for this MESPA run for this particular shit genome
+mkdir $dir
+#enter directory
+cd $dir
+
+#run MESPA
+python /pub36/florawf/mespa_testing/scripts/mespa_v1.3.py -a $genome -p $proteins -s $config -c 4
+
+#sorting through MESPA 
+#STEP 2
+
+#set names
+code="myoLuc"
+dir="${code}"
+cds_outfile1="${code}_Bmor.CDS.fa"
+cds_outfile2="${code}_Bmor_contig.CDS.fa"
+cds_outfile3="${code}_Bmor.CDS.nostops.fa"
+cds_outfile4="${code}_Bmor_contig.CDS.nostops.fa"
+cds_outfile5="${code}_Bmor.CDS.nostops.linear.fa"
+cds_outfile6="${code}_Bmor_contig.CDS.nostops.linear.fa"
+prot_outfile1="${code}_Bmor.prot.fa"
+prot_outfile2="${code}_Bmor_contig.prot.fa"
+prot_outfile3="${code}_Bmor.prot.nostops.fa"
+prot_outfile4="${code}_Bmor_contig.prot.nostops.fa"
+lookup1="${code}_Bmor_scaffold_lookup_table.csv"
+lookup2="${code}_Bmor_contig_lookup_table.csv"
+list1="${code}_Bmor_scaffold_to_be_removed_CDS.txt"
+list2="${code}_Bmor_contig_to_be_removed_CDS.txt"
+prot_location="${dir}/amino"
+nuc_location="${dir}/nucleotide"
+
+#make subdirectories in mespa sample directory
+cd $dir
+mkdir nucleotide
+mkdir amino
+mkdir amino/by_gene
+mkdir nucleotide/by_gene
+mkdir nucleotide/by_gene/renamed
+mkdir amino/by_gene/renamed
+
+#now doing everything twice to process rescaffolded genes (scaffolds) and those that are not rescaffolded (contigs)
+#Process gff file to remove contig entries - ##get the noncontig entries out
+grep -v 'contig' scaffolds.gff > scaffolds_nocontig.gff
+#Extract contig entries from gff file
+grep 'contig' scaffolds.gff > scaffolds_contig.gff
+
+#Extract sequences from scaffolds gff and count these
+gffread scaffolds_nocontig.gff -g onlygenemodels.fa -x "$cds_outfile1" -y "$prot_outfile1"
+#prints command to slurm file
+echo -e "Number retrived from $cds_outfile1: "
+#counts number of entries in new seq file
+grep -c '>' $cds_outfile1
+## 9448
+#Extract sequences from contig gff and count
+gffread scaffolds_contig.gff -g remaining_contigs.fa -x "$cds_outfile2" -y "$prot_outfile2"
+echo -e "Number retrived from $cds_outfile2: "
+grep -c '>' $cds_outfile2
+##564
+
+#Process scaffold fa to remove those with internal stops and count
+awk '/^>/ {printf("%s%s\t",(N>0?"\n":""),$0);N++;next;} {printf("%s",$0);} END {printf("\n");}' $prot_outfile1 | awk -F '\t'  '!($2 ~ /\./)' |  tr "\t" "\n" > $prot_outfile3
+echo -e "Number retrived from $prot_outfile3:"
+#count how many genes remain
+grep -c '>' $prot_outfile3
+##8820
+#Process contig fa to remove those with internal stops and count
+awk '/^>/ {printf("%s%s\t",(N>0?"\n":""),$0);N++;next;} {printf("%s",$0);} END {printf("\n");}' $prot_outfile2 | awk -F '\t'  '!($2 ~ /\./)' |  tr "\t" "\n" > $prot_outfile4
+echo -e "Number retrived from $prot_outfile4:"
+grep -c '>' $prot_outfile4
+##241
+
+#Create lookup table1 for renaming mespa names to our gene names (not renaming rn, just creating table)
+awk 'BEGIN {FS="[ ; \t ]"} {if ($3 ~ /cds/) print $10, $11, $12}' scaffolds_nocontig.gff | sed -e 's/Parent=//g' -e 's/Target=//g' -e 's/Name=//g' -e 's/ /,/g' | sort | uniq > $lookup1
+#add headers to the lookup table
+echo 'mRNA_ID,scaffold_id,Bmori_ID' >> $lookup1
+sed -i '1h;1d;$!H;$!d;G' $lookup1
+echo -e "Check the top of the table for $lookup1 is ok"
+head $lookup1
+#Create lookup table2 for renaming
+awk 'BEGIN {FS="[ ; \t ]"} {if ($3 ~ /cds/) print $10, $11, $12}' scaffolds_contig.gff | sed -e 's/Parent=//g' -e 's/Target=//g' -e 's/Name=//g' -e 's/ /,/g' | sort | uniq > $lookup2
+echo 'mRNA_ID,scaffold_id,Bmori_ID' >> $lookup2
+sed -i '1h;1d;$!H;$!d;G' $lookup2
+echo -e "Check the top of the table for $lookup2"
+head $lookup2
+
+#Compare CDS file for both contigs and scaffolds and filtered protein file to generate a list of those we need to remove from CDS file
+diff <(cat $prot_outfile3 | grep -a ">" | sort)  <(cat $prot_outfile1 | grep -a ">" | sort)| grep -a "^>" | awk -F\> '{print $3}' > $list1
+diff <(cat $prot_outfile4 | grep -a ">" | sort)  <(cat $prot_outfile2 | grep -a ">" | sort)| grep -a "^>" | awk -F\> '{print $3}' > $list2
+#Remove the disguarded entries from CDS files for both scaffolds and contigs, ##using reverse grep to take those not named in the file
+awk '{ if ((NR>1)&&($0~/^>/)) { printf("\n%s", $0); } else if (NR==1) { printf("%s", $0); } else { printf("\t%s", $0); } }' $cds_outfile1 | grep -vf $list1 - | tr "\t" "\n" > $cds_outfile3
+awk '{ if ((NR>1)&&($0~/^>/)) { printf("\n%s", $0); } else if (NR==1) { printf("%s", $0); } else { printf("\t%s", $0); } }' $cds_outfile2 | grep -vf $list2 - | tr "\t" "\n" > $cds_outfile4
+
+#Count number of entries and ensure they match with the numbers above, these may differ due to how uppmax seems to process as binary files
+echo -e "Number of sequences in $cds_outfile3:"
+grep -c '>' $cds_outfile3
+echo -e "Number of sequences in $cds_outfile4:"
+grep -c '>' $cds_outfile4
+##matched!
+
+#Make CDs fasta files linear ##previously interleaved
+sed -e 's/\(^>.*$\)/#\1#/' $cds_outfile3 | tr -d "\r" | tr -d "\n" | sed -e 's/$/#/' | tr "#" "\n" | sed -e '/^$/d' > $cds_outfile5
+sed -e 's/\(^>.*$\)/#\1#/' $cds_outfile4 | tr -d "\r" | tr -d "\n" | sed -e 's/$/#/' | tr "#" "\n" | sed -e '/^$/d' > $cds_outfile6
+
+####DOWNLOAD RENAMING SCRIPT (ON MAC) AND PLACE IN MESPA_TESTING/SCRIPTS FOLDER - done
+#Rename CDS files using the lookup tables
+/pub36/florawf/mespa_testing/scripts/rename_mespa.sh $cds_outfile5 $lookup1 $code
+/pub36/florawf/mespa_testing/scripts/rename_mespa.sh $cds_outfile6 $lookup2 $code
+#Rename protein files using the lookup tables
+/pub36/florawf/mespa_testing/scripts/rename_mespa.sh $prot_outfile3 $lookup1 $code
+/pub36/florawf/mespa_testing/scripts/rename_mespa.sh $prot_outfile4 $lookup2 $code
+
+#Copy the required files to folders for downstream processing
+##Forgot to change the test code from test to myoLuc, and 
+cp $prot_outfile3 amino/myoLuc_Bmor.prot.nostops.fa
+cp $prot_outfile4 amino/myoLuc_Bmor_contig.prot.nostops.fa
+cp $cds_outfile5 nucleotide/myoLuc_Bmor.CDS.nostops.linear.fa
+cp $cds_outfile6 nucleotide/myoLuc_Bmor_contig.CDS.nostops.linear.fa
+
+##STEP 3: CONVERT NUCLEOTIDE FILES FROM A BY GENOME FORMAT TO A BY GENE FORMAT
+#separates genes that match the gene list out of the genome sequence file, and separate out into a separate gene file in the by_gene folder
+#CHECK WITH VICTORIA THAT I SHOULD BE USING THIS GENE LIST AND NOT A BESPOKE ONE - do need bespoke one
+#DOWNLOAD GENE LIST AND PLACE IN MESPA_TESTING/SCRIPTS FOLDER - created  myoMyo_protein_names.txt in data folder
+
+#CHECK YOU NEED THIS
+#23.10.21: need to remove the myoluc bit before the gene, doesn't match the lookup file
+#eg $cds_outfile5 is >myoLuc_myoMyo_rna-XM_ rather than myoMyo_rna-XM_
+sed -i 's/>myoLuc_/>/' nucleotide/*.fa 
+sed -i 's/>myoMyo_rna_XM/>myoMyo_rna-XM/' nucleotide/*.fa 
+sed -i 's/_1/.1/' nucleotide/*.fa 
+
+#gene list should match the genes names in the file names
+list="$HOME/Datafiles/Bats/GCF_rerun_0821/mespa/myoMyo_protein_names.txt"
+while read gene
+do
+input_path="nucleotide/*.fa"
+output="nucleotide/by_gene/${gene}.fasta"
+awk 'BEGIN{RS=">"}/'${gene}'\n/{print">"$0}' $input_path > $output
+done < $list
+
+
+###STEP 4: CONVERT AMINO ACID FILES FROM A BY GENOME FORMAT TO A BY GENE FORMAT
+
+#CHECK YOU NEED THIS
+#23.10.21: need to remove the myoluc bit before the gene, doesn't match the lookup file
+#eg $cds_outfile5 is >myoLuc_myoMyo_rna-XM_ rather than myoMyo_rna-XM_
+sed -i 's/>myoLuc_/>/' amino/*.fa 
+sed -i 's/>myoMyo_rna_XM/>myoMyo_rna-XM/' amino/*.fa 
+sed -i 's/_1/.1/' amino/*.fa 
+
+#repeat step three but with the amino acid files
+list="$HOME/Datafiles/Bats/GCF_rerun_0821/mespa/myoMyo_protein_names.txt"
+while read gene
+do
+input_path="amino/*.fa"
+output="amino/by_gene/${gene}.fasta"
+awk 'BEGIN{RS=">"}/'${gene}'\n/{print">"$0}' $input_path > $output
+done < $list
+
+
+###STEP 5: REMOVE BLANK FILES
+#removes files with a size of zero
+cd nucleotide/by_gene
+find -type f -size 0 -delete 
+cd ../../amino/by_gene
+find -type f -size 0 -delete
+
+
+###STEP 6: RENAME FILES
+#DOWNLOAD RENAME.PL SCRIPT (ON MAC) AND PUT IN THE MESPA_TESTING/SCRIPTS FOLDER
+#CHECK WE CAN USE PERL - created perl environment, as would not work in the mespa environment - suppose other dependencies were blocking each other
+#NOT ACTUALLY USING THIS SCRIPT 22/04/21 - victoria says doesn't look like i need it bc already named w genes, and spp name in fasta file - .pl not working on it anyway
+cd nucleotide/by_gene
+perl /pub36/florawf/mespa_testing/scripts/rename.pl 
+cd ../../amino/by_gene
+perl /pub36/florawf/mespa_testing/scripts/rename.pl
+
+#The files you need for alignment and downstream analysis are located in the following two folders:
+#• /nucleotide/by_gene/renamed 
+#• /amino/by_gene/renamed
+
+
+
+#--------matching_SGO_files.txt-------------------------------------------------------------------------------------------------------------------------------
+#finding the matching genes between the mespa'd orthologs between Mb and Ml
+# get the lists off Mb
+cd ~/Datafiles/Bats/GCF_rerun_0821/mespa/myoBra/nucleotide/
+#check if there is renamed folder and cpamn, if so delete
+ls by_gene > mB_nucleotide_list
+
+#check if there is renamed folder and cpamn, if so delete
+cd ../amino
+ls by_gene > mB_amino_list
+
+#do the same for myoLuc so can compare
+cd ~/Datafiles/Bats/GCF_rerun_0821/mespa/myoLuc/nucleotide/
+#check if there is renamed folder and cpamn, if so delete
+ls by_gene > mL_nucleotide_list
+
+cd ../amino
+#check if there is renamed folder and cpamn, if so delete
+ls by_gene > mL_amino_list
+
+
+#get common lines in both files (1 = suppresses unique lines in file 1, 2 = suppresses unique lines in file 2) - need to sort as well
+amino_mB=~/Datafiles/Bats/GCF_rerun_0821/mespa/myoBra/amino/mB_amino_list
+amino_mL=~/Datafiles/Bats/GCF_rerun_0821/mespa/myoLuc/amino/mL_amino_list
+nuc_mB=~/Datafiles/Bats/GCF_rerun_0821/mespa/myoBra/nucleotide/mB_nucleotide_list
+nuc_mL=~/Datafiles/Bats/GCF_rerun_0821/mespa/myoLuc/nucleotide/mL_nucleotide_list
+
+
+cd ~/Datafiles/Bats/GCF_rerun_0821/mespa/
+comm -12 <(sort $amino_mB) <(sort $amino_mL) > mB_mL_amino
+comm -12 <(sort $nuc_mB) <(sort $nuc_mL) > mB_mL_nuc
+
+#6891 genes in common
+
+#--------concat_SGOs_neat.txt------------------------------------------------------------------------------------------------------------------------------
+#make directory for files
+cd ~/Datafiles/Bats/GCF_rerun_0821/
+mkdir 8bat_SGOs
+cd 8bat_SGOs
+
+#copy over file that names the matching sequences between myoluc and myobra
+cp ~/Datafiles/Bats/GCF_rerun_0821/mespa/mB_mL_amino mBmLamino_names
+#check length of this file
+wc -l mBmLamino_names
+#6891 seqs
+#remove .fasta on to the end of each sequence
+sed -i 's/.fasta//' mBmLamino_names
+
+#copying over the bat1k_6bats SGOs
+cp ~/Datafiles/Bats/GCF_rerun_0821/orthofinder/14Sep21_strict/primary_transcripts/OrthoFinder/Results_Sep16/Single_Copy_Orthologue_Sequences/*.fa .
+#10122 files now in folder (10121 genes)
+
+#finds the groups with sequences that are inside the SGO files that match the myobra and myoluc matches, creating a lookup file to change the names
+grep -w -f mBmLamino_names *.fa > lookup_names
+#6891
+
+#take > out of lookup file
+sed -i 's/>//' lookup_names
+
+#this command changes the files with matching names in the lookup file to the myoMyo name, and deletes the files that do not match
+for file in *.fa;do
+    name="${file%%}" # dont remove extension
+    map="$(grep "$name" lookup_names | cut -d':' -f 2)"
+    mv "$file" "$map".fasta
+done
+
+#create directories for merging the file
+mkdir mBmL
+cd mBmL
+mkdir myoBra
+mkdir myoLuc
+mkdir merged_mBmL
+
+#copying over the fastas from myoBra and myoLuc
+cp ~/Datafiles/Bats/GCF_rerun_0821/mespa/myoBra/amino/by_gene/*.fasta myoBra/.
+cp ~/Datafiles/Bats/GCF_rerun_0821/mespa/myoLuc/amino/by_gene/*.fasta myoLuc/.
+
+#need to change accession names in files to label either mB or mL
+sed -i 's/>myoMyo_/>mB_mM_/' myoBra/*.fasta 
+sed -i 's/>myoMyo_/>mL_mM_/' myoLuc/*.fasta
+
+cd myoBra
+
+#merge same seq myoluc and myobra seqs together, and puts in merged_mBmL folder, deletes the files that do not match
+for file in *.fasta; do
+  [[ ! -f $file ]] && continue      # pick up only regular files
+
+  otherfile="../myoLuc/$file"
+  [[ ! -f $otherfile ]] && continue # skip if there is no matching file in folder 2
+  cat "$file" "$otherfile" > "../merged_mBmL/$file"
+done
+
+#cd back to main folder
+cd ../..
+mkdir merged_SGOs
+
+#merge 6bat seqs and mBmL seqs together, and puts in merged_SGOs folder
+
+for file in *.fasta; do
+  [[ ! -f $file ]] && continue      # pick up only regular files
+
+  otherfile="mBmL/merged_mBmL/$file"
+  [[ ! -f $otherfile ]] && continue # skip if there is no matching file in folder 2
+  cat "$file" "$otherfile" > "merged_SGOs/$file"
+done
+
+#merged with 6891 seqs! blank lines after myobra and myoluc seqs, not a problem tho
+
+#------------------------align_SGOs.txt---------------------------------------------------------------------------------------------------------------------------------------
+#aligning the SGOs
+#decided just to do muscle alignments
+mkdir ~/Datafiles/Bats/GCF_rerun_0821/muscle_alignments
+cd ~/Datafiles/Bats/GCF_rerun_0821/muscle_alignments
+
+#create muscle script
+touch muscle_script.sh
+vim muscle_script.sh
+#-------
+for i in *.fasta
+do
+muscle -in $i -out $i.mu
+done
+
+#$ -cwd
+#$ -V
+#$ -l h_rt=2:00:00
+
+#-------
+
+cp ~/Datafiles/Bats/GCF_rerun_0821/8bat_SGOs/merged_SGOs/*.fasta .
+
+#Run from inside the informative SGO fasta file folder, completes within seconds, maybe a couple of minutes. 
+bash muscle_script.sh
+
+#checking all have been aligned properly
+
+mkdir muscle_checks
+cd muscle_checks
+ls ../*.fasta > before
+ls ../*.fasta.mu > after
+cat before | wc -l 
+#6891
+cat after | wc -l 
+#6891
+
+#CHECK
+#use if you have discrepancies 	
+#remove the .mu from the after file, so can compare with the before file
+#sed -i 's/.mu//' after
+#check any file names that are unique to the before file, the output will be any unaligned files
+#comm -23 <(sort before) <(sort after)
+
+
+#--------------------------------------------------10genes_PAML_test.txt----------------------------------------------------------------------------------------------------
+#need to make nuc db 
+
+cd ~/Datafiles/Bats/GCF_rerun_0821
+mkdir 8bats_nuc
+cd 8bats_nuc
+
+#extract nucleotide seqs for genes using gffread (on mapping env!)
+conda activate mapping
+
+workdir=~/Datafiles/Bats/GCF_rerun_0821/ncbi_5bats/
+gffread $workdir/molMol_CDS.gff -g $workdir/GCF_014108415.1_mMolMol1.p_genomic.fna -S -x molMol_CDS_nuc.fa 
+gffread $workdir/phyDis_CDS.gff -g $workdir/GCF_004126475.2_mPhyDis1.pri.v3_genomic.fna -S -x phyDis_CDS_nuc.fa 
+gffread $workdir/pipKuh_CDS.gff -g $workdir/GCF_014108245.1_mPipKuh1.p_genomic.fna -S -x pipKuh_CDS_nuc.fa 
+gffread $workdir/rhiFer_CDS.gff -g $workdir/GCF_004115265.1_mRhiFer1_v1.p_genomic.fna -S -x rhiFer_CDS_nuc.fa
+gffread $workdir/rouAeg_CDS.gff -g $workdir/GCF_014176215.1_mRouAeg1.p_genomic.fna -S -x rouAeg_CDS_nuc.fa
+
+
+workdir2=~/Datafiles/Bats/myomyo
+gffread $workdir2/prot/GCF_myomyo_CDS.gff -g $workdir2/GCF_014108235.1_mMyoMyo1.p_genomic.fna -S -x myoMyo_CDS_nuc.fa 
+
+#concat nuc files from the mespa output for mB and mL
+touch myoBra_CDS_nuc.fa
+cat ~/Datafiles/Bats/GCF_rerun_0821/mespa/myoBra/nucleotide/by_gene/*.fasta >> myoBra_CDS_nuc.fa
+touch myoLuc_CDS_nuc.fa
+cat ~/Datafiles/Bats/GCF_rerun_0821/mespa/myoLuc/nucleotide/by_gene/*.fasta >> myoLuc_CDS_nuc.fa
+
+#need to add in the spp names, to match the alignment files 
+sed -i 's/>/>molMol_/' molMol_CDS_nuc.fa 
+sed -i 's/>/>phyDis_/' phyDis_CDS_nuc.fa 
+sed -i 's/>/>rhiFer_/' rhiFer_CDS_nuc.fa 
+sed -i 's/>/>rouAeg_/' rouAeg_CDS_nuc.fa 
+sed -i 's/>/>myoMyo_/' myoMyo_CDS_nuc.fa 
+sed -i 's/>/>pipKuh_/' pipKuh_CDS_nuc.fa 
+sed -i 's/>myoMyo_/>mB_mM_/' myoBra_CDS_nuc.fa 
+sed -i 's/>myoMyo_/>mL_mM_/' myoLuc_CDS_nuc.fa 
+
+#concat all together
+touch all8_nuc_genomes.fa
+cat *nuc.fa >> all8_nuc_genomes.fa 
+
+#--------------------------------------------------new_script: creating nucleotide alignments----------------------------------------------------------------------------------------------------
+
+#need to remove myobra and myoluc duplicates 
+#first make a list of the duplicates
+touch mB_mL_list
+grep '>' myoBra_CDS_nuc.fa | sort | uniq -d >> mB_mL_list
+grep '>' myoLuc_CDS_nuc.fa | sort | uniq -d >> mB_mL_list
+#183 duplicates, will be some crossover
+
+#change the list file so it matches the alignment file names
+#change list so it matches file name of alignments
+sed -i 's/>mB_mM_/myoMyo_/' mB_mL_list
+sed -i 's/>mL_mM_/myoMyo_/' mB_mL_list
+sed -i 's/$/.fasta.mu/g' mB_mL_list
+
+#go back to the alignments folder, and create a different folder for these filtered ones
+cd ~/Datafiles/Bats/GCF_rerun_0821/muscle_alignments/
+mkdir filtered_alignments
+cp alignments/*fasta.mu filtered_alignments/.
+
+cd filtered_alignments
+#6891 - there already
+
+xargs rm <~/Datafiles/Bats/GCF_rerun_0821/8bats_nuc/mB_mL_list
+#6777 now - 182 in original file, so some crossover
+
+#now the nucleotide seq database, and filtered muscle alignments are set up, can move onto nucleotide alignments
+cd ~/Datafiles/Bats/GCF_rerun_0821/nuc_align
+#make directories for slightly neater results
+mkdir prot_MSA
+mkdir nuc_seq
+mkdir nuc_MSA
+mkdir names
+
+#add in fasta_sorter script #REQUIRES MESPA ENVIRONMENT
+touch fasta_sorter.py
+vim fasta_sorter.py
+##
+from Bio import SeqIO
+import sys
+
+infile = sys.argv[1]
+
+records = SeqIO.parse(open(infile, 'r'), 'fasta')
+
+records_dict = SeqIO.to_dict(records)
+
+for rec in sorted(records_dict):
+    print ">%s\n%s" % (rec, records_dict[rec].seq)
+##  
+
+#copy over filtered muscle alignments
+cp ../muscle_alignments/filtered_alignments/*fasta.mu .
+
+#create nuc_seq creator file
+touch make_nuc_seq.sh
+vim make_nuc_seq.sh
+
+##
+#!usr/bin/bash
+
+for f in *fasta.mu; do
+ 	run=$(echo $f | awk -F "." -v OFS="." '{print$1,$2}')
+	echo $run
+	python fasta_sorter.py $f > prot_MSA/${run}.fasta.mu.sorted
+	grep '>' prot_MSA/$run.fasta.mu.sorted > names/$run.names
+	sed -i 's/>//' names/$run.names
+	seqtk subseq ../8bats_nuc/all8_nuc_genomes.fa names/$run.names > nuc_seq/$run.fasta.nuc
+	python fasta_sorter.py nuc_seq/$run.fasta.nuc > nuc_seq/$run.fasta.nuc.sorted
+done
+
+##
+
+#run this to create the nucleotide sequences for pal2nal
+conda activate mespa
+bash make_nuc_seq.sh
+
+#create pal2nal.sh
+touch pal2nal.sh
+vim pal2nal.sh
+
+##
+#!/bin/bash
+for f in *.names; do
+        run=$(echo $f | awk -F "." -v OFS="." '{print$1,$2}')
+        echo "${run} started"
+        amino="../prot_MSA/${run}.fasta.mu.sorted"
+        seq="../nuc_seq/${run}.fasta.nuc.sorted"
+        codon="../nuc_MSA/$run.nuc.MSA"
+        ~/anaconda3/envs/pal2nal/bin/pal2nal.pl $amino $seq -output fasta > $codon
+        echo "${run} finished"
+done
+##
+
+#run the pal2nal code
+conda activate pal2nal
+cd names
+bash ../pal2nal.sh
+
+
+#-------------------------------------------------- looping and running PAML----------------------------------------------------------------------------------
+#cd into the PAML directory #have edited this, as had to edit as the pub has changed mid-run
+cd ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/
+
+#make necessary directories for ctl files, nuc_MSAs and results
+#results directories
+mkdir selection_tests
+cd selection_tests
+mkdir myobra_forward
+mkdir myoluc_forward
+mkdir myobra_forward/branch_site_neutral
+mkdir myoluc_forward/branch_site_neutral
+mkdir myobra_forward/branch_site
+mkdir myoluc_forward/branch_site
+
+#control file directory
+cd ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/
+mkdir ctl_files 
+cd ctl_files
+mkdir myobra_forward
+mkdir myoluc_forward
+mkdir myobra_forward/branch_site_neutral
+mkdir myoluc_forward/branch_site_neutral
+mkdir myobra_forward/branch_site
+mkdir myoluc_forward/branch_site
+
+#nuc MSAs directory
+cd ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/
+mkdir nuc_MSAs
+
+
+#create the numbered tree files with myobra and myoluc as forward branches
+#put in number tree as all sequences are in the same order (thanks to pal2nal preprocessing)
+#myobra and myoluc are first alphabetically due to seq labels mb_ and ml_
+#1. myobra
+#2. myoluc
+#3. molmol
+#4. myomyo
+#5. phydis
+#6. pipkuh
+#7. rhifer
+#8. rouaeg
+
+#myobra
+cat > num_myobra_forward_tree.txt
+(8,7,(5,(3,(6,(4,(1#1,2))))));
+
+#myoluc
+cat > num_myoluc_forward_tree.txt 
+(8,7,(5,(3,(6,(4,(1,2#1))))));
+
+#add perl make files into the nuc_MSAs directory
+cd nuc_MSAs
+
+#make file for myobra forward neutral runs
+cat > mb_neutral_make.perl
+
+#define file array
+my @files = <*.MSA>;
+
+for my $file(@files){
+		my @filename = split /\./, $file;
+		my $outfile = "/pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/ctl_files/myobra_forward/branch_site_neutral/@filename[0]_branch_site_mb_neutral.ctl";
+		open OUTFILE, ">$outfile" or die "Cannot open $outfile: $!";
+		print OUTFILE "seqfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/nuc_MSAs/@filename[0].1.nuc.MSA\n";
+		print OUTFILE "treefile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/num_myobra_forward_tree.txt\n";
+		print OUTFILE "outfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/branch_site_neutral/@filename[0]_branch_site_neutral.txt\n";
+		print OUTFILE "noisy = 0\n";
+		print OUTFILE "verbose = 1\n";
+		print OUTFILE "runmode = 0\n";
+		print OUTFILE "seqtype = 1\n";
+		print OUTFILE "CodonFreq = 2\n";
+		print OUTFILE "clock = 0\n";
+		print OUTFILE "aaDist = 0\n";
+		print OUTFILE "aaRatefile = dat/jones.dat\n";
+		print OUTFILE "model = 2\n";
+		print OUTFILE "NSsites = 2\n";
+		print OUTFILE "icode = 0\n";
+		print OUTFILE "Mgene = 0\n";
+		print OUTFILE "fix_kappa = 0\n";
+		print OUTFILE "kappa = 2\n";
+		print OUTFILE "fix_omega = 1\n";
+		print OUTFILE "omega = 1.0\n";
+		print OUTFILE "fix_alpha = 1\n";
+		print OUTFILE "alpha = 0.\n";
+		print OUTFILE "Malpha = 0\n";
+		print OUTFILE "ncatG = 10\n";
+		print OUTFILE "getSE = 0\n";
+		print OUTFILE "RateAncestor = 1\n";
+		print OUTFILE "Small_Diff = 0.5e-6\n";
+		print OUTFILE "cleandata =0";
+		close OUTFILE;
+				}
+				
+#make file for myobra forward selection runs
+cat > mb_branchsite_make.perl
+
+
+#define file array
+my @files = <*.MSA>;
+
+for my $file(@files){
+		my @filename = split /\./, $file;
+		my $outfile = "/pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/ctl_files/myobra_forward/branch_site/@filename[0]_branch_site_mb.ctl";
+		open OUTFILE, ">$outfile" or die "Cannot open $outfile: $!";
+		print OUTFILE "seqfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/nuc_MSAs/@filename[0].1.nuc.MSA\n";
+		print OUTFILE "treefile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/num_myobra_forward_tree.txt\n";
+		print OUTFILE "outfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/branch_site/@filename[0]_branch_site.txt\n";
+		print OUTFILE "noisy = 0\n";
+		print OUTFILE "verbose = 1\n";
+		print OUTFILE "runmode = 0\n";
+		print OUTFILE "seqtype = 1\n";
+		print OUTFILE "CodonFreq = 2\n";
+		print OUTFILE "clock = 0\n";
+		print OUTFILE "aaDist = 0\n";
+		print OUTFILE "aaRatefile = dat/jones.dat\n";
+		print OUTFILE "model = 2\n";
+		print OUTFILE "NSsites = 2\n";
+		print OUTFILE "icode = 0\n";
+		print OUTFILE "Mgene = 0\n";
+		print OUTFILE "fix_kappa = 0\n";
+		print OUTFILE "kappa = 2\n";
+		print OUTFILE "fix_omega = 0\n";
+		print OUTFILE "omega = 0.4\n";
+		print OUTFILE "fix_alpha = 1\n";
+		print OUTFILE "alpha = 0.\n";
+		print OUTFILE "Malpha = 0\n";
+		print OUTFILE "ncatG = 10\n";
+		print OUTFILE "getSE = 0\n";
+		print OUTFILE "RateAncestor = 1\n";
+		print OUTFILE "Small_Diff = 0.5e-6\n";
+		print OUTFILE "cleandata =0";
+		close OUTFILE;
+				}
+				
+#make file for myoluc forward neutral runs
+cat > ml_neutral_make.perl
+
+#define file array
+my @files = <*.MSA>;
+
+for my $file(@files){
+		my @filename = split /\./, $file;
+		my $outfile = "/pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/ctl_files/myoluc_forward/branch_site_neutral/@filename[0]_branch_site_ml_neutral.ctl";
+		open OUTFILE, ">$outfile" or die "Cannot open $outfile: $!";
+		print OUTFILE "seqfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/nuc_MSAs/@filename[0].1.nuc.MSA\n";
+		print OUTFILE "treefile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/num_myoluc_forward_tree.txt\n";
+		print OUTFILE "outfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myoluc_forward/branch_site_neutral/@filename[0]_branch_site_neutral.txt\n";
+		print OUTFILE "noisy = 0\n";
+		print OUTFILE "verbose = 1\n";
+		print OUTFILE "runmode = 0\n";
+		print OUTFILE "seqtype = 1\n";
+		print OUTFILE "CodonFreq = 2\n";
+		print OUTFILE "clock = 0\n";
+		print OUTFILE "aaDist = 0\n";
+		print OUTFILE "aaRatefile = dat/jones.dat\n";
+		print OUTFILE "model = 2\n";
+		print OUTFILE "NSsites = 2\n";
+		print OUTFILE "icode = 0\n";
+		print OUTFILE "Mgene = 0\n";
+		print OUTFILE "fix_kappa = 0\n";
+		print OUTFILE "kappa = 2\n";
+		print OUTFILE "fix_omega = 1\n";
+		print OUTFILE "omega = 1.0\n";
+		print OUTFILE "fix_alpha = 1\n";
+		print OUTFILE "alpha = 0.\n";
+		print OUTFILE "Malpha = 0\n";
+		print OUTFILE "ncatG = 10\n";
+		print OUTFILE "getSE = 0\n";
+		print OUTFILE "RateAncestor = 1\n";
+		print OUTFILE "Small_Diff = 0.5e-6\n";
+		print OUTFILE "cleandata =0";
+		close OUTFILE;
+				}
+				
+#make file for myoluc forward selection runs
+cat > ml_branchsite_make.perl
+
+#define file array
+my @files = <*.MSA>;
+
+for my $file(@files){
+		my @filename = split /\./, $file;
+		my $outfile = "/pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/ctl_files/myoluc_forward/branch_site/@filename[0]_branch_site_ml.ctl";
+		open OUTFILE, ">$outfile" or die "Cannot open $outfile: $!";
+		print OUTFILE "seqfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/nuc_MSAs/@filename[0].1.nuc.MSA\n";
+		print OUTFILE "treefile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/num_myoluc_forward_tree.txt\n";
+		print OUTFILE "outfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myoluc_forward/branch_site/@filename[0]_branch_site.txt\n";
+		print OUTFILE "noisy = 0\n";
+		print OUTFILE "verbose = 1\n";
+		print OUTFILE "runmode = 0\n";
+		print OUTFILE "seqtype = 1\n";
+		print OUTFILE "CodonFreq = 2\n";
+		print OUTFILE "clock = 0\n";
+		print OUTFILE "aaDist = 0\n";
+		print OUTFILE "aaRatefile = dat/jones.dat\n";
+		print OUTFILE "model = 2\n";
+		print OUTFILE "NSsites = 2\n";
+		print OUTFILE "icode = 0\n";
+		print OUTFILE "Mgene = 0\n";
+		print OUTFILE "fix_kappa = 0\n";
+		print OUTFILE "kappa = 2\n";
+		print OUTFILE "fix_omega = 0\n";
+		print OUTFILE "omega = 0.4\n";
+		print OUTFILE "fix_alpha = 1\n";
+		print OUTFILE "alpha = 0.\n";
+		print OUTFILE "Malpha = 0\n";
+		print OUTFILE "ncatG = 10\n";
+		print OUTFILE "getSE = 0\n";
+		print OUTFILE "RateAncestor = 1\n";
+		print OUTFILE "Small_Diff = 0.5e-6\n";
+		print OUTFILE "cleandata =0";
+		close OUTFILE;
+				}
+				
+#copy over nuc_MSAs from the nuc_align folder
+cp ../../nuc_align/nuc_MSA/*MSA .
+
+#create the ctl files
+perl mb_neutral_make.perl
+perl mb_branchsite_make.perl
+perl ml_neutral_make.perl
+perl ml_branchsite_make.perl
+
+#check numbers to see if there are the right number of control files (6777)
+
+#set up screens for each to run separately
+#cd into the correct ctl directory 
+for f in *.ctl
+do
+codeml $f
+done
+
+
+###### pairwise sequence aligning
+#taken from 220305_PAML_working_file
+cd Datafiles/Bats/GCF_rerun_0821/
+mkdir pairwise_align
+cd pairwise_align
+cp ../8bat_SGOs/mBmL/merged_mBmL/*fasta . 
+#6891 files
+
+#create muscle script
+cat > muscle_script.sh
+
+#-------
+for i in *.fasta
+do
+muscle -in $i -out $i.mu
+done
+
+#$ -cwd
+#$ -V
+#$ -l h_rt=2:00:00
+
+#-------
+
+#start muscle screen
+
+#Run from inside the informative SGO fasta file folder, completes within seconds, maybe a couple of minutes. 
+bash muscle_script.sh
+
+mkdir mu_align
+mv *.mu mu_align/.
+
+#need to filter these to make sure they only carry over the filtered versions
+mkdir filtered_alignments
+cp mu_align/*fasta.mu filtered_alignments/.
+
+cd filtered_alignments
+#6891 - there already
+
+xargs rm <~/Datafiles/Bats/GCF_rerun_0821/8bats_nuc/mB_mL_list #will pop up with many warning signss as lots they are not deleting
+#6777 now - 182 in original file, so some crossover
+* 
+cd ..
+mkdir nuc_align
+cd nuc_align
+				
+				
+#add in fasta_sorter script #REQUIRES MESPA ENVIRONMENT
+
+cat > fasta_sorter.py
+##
+from Bio import SeqIO
+import sys
+
+infile = sys.argv[1]
+
+records = SeqIO.parse(open(infile, 'r'), 'fasta')
+
+records_dict = SeqIO.to_dict(records)
+
+for rec in sorted(records_dict):
+    print ">%s\n%s" % (rec, records_dict[rec].seq)
+##  
+
+#copy over filtered muscle alignments
+cp ../filtered_alignments/*fasta.mu .
+
+
+#create nuc_seq creator file
+cat > make_nuc_seq.sh
+
+##
+#!usr/bin/bash
+
+for f in *fasta.mu; do
+ 	run=$(echo $f | awk -F "." -v OFS="." '{print$1,$2}')
+	echo $run
+	python fasta_sorter.py $f > prot_MSA/${run}.fasta.mu.sorted
+	grep '>' prot_MSA/$run.fasta.mu.sorted > names/$run.names
+	sed -i 's/>//' names/$run.names #get out the names of each and put them in a file, removing the 
+	seqtk subseq mBmL_nuc_genomes.fa names/$run.names > nuc_seq/$run.fasta.nuc 
+	python fasta_sorter.py nuc_seq/$run.fasta.nuc > nuc_seq/$run.fasta.nuc.sorted
+done
+
+##
+
+#create a all genome file for both ml and mb
+touch mBmL_nuc_genomes.fa 
+cat ../../8bats_nuc/myoBra_CDS_nuc.fa >> mBmL_nuc_genomes.fa 
+cat ../../8bats_nuc/myoLuc_CDS_nuc.fa >> mBmL_nuc_genomes.fa 
+
+#run this to create the nucleotide sequences for pal2nal
+conda activate mespa
+bash make_nuc_seq.sh
+
+#create pal2nal.sh
+cat > pal2nal.sh
+
+##
+#!/bin/bash
+for f in *.names; do
+        run=$(echo $f | awk -F "." -v OFS="." '{print$1,$2}') #strip out the first bits of the name file
+        echo "${run} started"
+        amino="../prot_MSA/${run}.fasta.mu.sorted"
+        seq="../nuc_seq/${run}.fasta.nuc.sorted"
+        codon="../nuc_MSA/$run.nuc.MSA"
+        ~/anaconda3/envs/pal2nal/bin/pal2nal.pl $amino $seq -output fasta > $codon
+        echo "${run} finished"
+done
+##
+
+#run the pal2nal code
+conda activate pal2nal
+cd names
+bash ../pal2nal.sh
+
+
+#CODE TO GET ALL OF THE MKTEST PARAMETERS
+#RUN THE YN00 TO FIND THE DNDS BETWEEN MYOBRA AND MYOLUC
+##### actually nice stuff, now we know yn00 works # this is now called a between folder
+#create folder for yn00, and ctl folder and output folder inside it
+cd ~/Datafiles/Bats/GCF_rerun_0821/
+mkdir yn00
+cd yn00
+mkdir ctl_files
+mkdir output
+
+#move back into the directory containing the myoluc and myobra nucleotide alignments
+cd ../pairwise_align/nuc_align/nuc_MSA/
+
+#create a perl script to make ctl files, based on the perl makefile used for PAML
+cat > yn00_ctl_make.perl
+
+#define file array
+my @files = <*.nuc.MSA>;
+
+for my $file(@files){
+		my @filename = split /\./, $file;
+		my $outfile = "/pub59/florawf/Datafiles/Bats/GCF_rerun_0821/yn00/ctl_files/@filename[0].1.ctl";
+		open OUTFILE, ">$outfile" or die "Cannot open $outfile: $!";
+		print OUTFILE "seqfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/@filename[0].1.nuc.MSA\n";
+		print OUTFILE "outfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/yn00/output/@filename[0].1.txt\n";
+		print OUTFILE "verbose = 0 * 1: detailed output (list sequences), 0: concise output\n";
+		print OUTFILE "icode = 0 * 0:universal code; 1:mammalian mt; 2-10:see below\n";
+		print OUTFILE "weighting = 0 * weighting pathways between codons (0/1)?\n";
+		print OUTFILE "commonf3x4 = 0 * use one set of codon freqs for all pairs (0/1)?\n";		
+		close OUTFILE;
+				}
+		
+#####
+#run the perl script
+perl yn00_ctl_make.perl
+
+#move back to the yn00 ctl_files directory
+cd ../../../yn00/ctl_files/
+ 
+#create a screen to run, and set in the paml py27 environment
+#make sure you are in the correct ctl directory
+for f in *.ctl
+do
+yn00 $f
+done
+
+#create a directory to put in the grepped lines 
+cd ../output
+mkdir grepped_lines
+
+#loop to get all of the grep lines we want out
+for i in $(ls *.txt); do
+grep 'LWL85m' $i > grepped_lines/$(basename $i .txt).line
+done
+
+
+#DNDS
+#MK_within python wrangling neatfile 10/06/22
+#move to the folder that holds the nucleotide alignments (aka codon alignments)
+cd ~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA
+
+#first make file for results to go into
+cat > results_base.csv
+gene,dN,dS
+
+#then open python and run the following
+#import packages
+from pathlib import Path
+from Bio import SeqIO
+import numpy as np
+import pandas as pd
+
+#read in the table we will append results to
+results = pd.read_csv("results_base.csv", header='infer', delimiter = ',')
+
+#set the loop to go over the .msa files in the directory you are in
+directory = ''
+pathlist = Path(directory).glob('*.MSA')
+for file in pathlist:
+	nuc_msa = list(SeqIO.parse(file, "fasta")) # read each alignment
+	mb_seq = nuc_msa[0] #set first seq as mb file
+	ml_seq = nuc_msa[1] #set second as ml file (should already be in this order as they are sorted)
+	#split up the sequences into codons
+	mb_codons = [(mb_seq.seq)[start:start+3] for start in range(0,len((mb_seq.seq)),3)] 
+	ml_codons = [(ml_seq.seq)[start:start+3] for start in range(0,len((ml_seq.seq)),3)]
+	#create empty lists for the translated amino acids to sit in
+	mb_prot = []
+	ml_prot = []
+	#iterate over the codon list, and append the empty list, translating each codon one by one
+	for x in mb_codons:
+		mb_prot.append(x.translate())
+	for x in ml_codons:
+		ml_prot.append(x.translate())	
+	#make empty dataframe
+	df = pd.DataFrame()
+	#add in list as column
+	df["n1"] = mb_codons
+	df["n2"] = ml_codons
+	df["a1"] = mb_prot
+	df["a2"] = ml_prot
+	#convert all to strings, and all to uppercase so match properly
+	df['n1'] = df['n1'].str.upper()
+	df['n2'] = df['n2'].str.upper()
+	df['a1'] = df['a1'].str.upper()
+	df['a2'] = df['a2'].str.upper()
+	#take out the rows with gaps in them
+	df = df[((df['n1'] != '---' ) & (df['n2'] != '---'))]
+	#calculate the number of substitutions
+	total_subs = sum(df['n1'] != df['n2'])
+	non_syn = sum(df['a1'] != df['a2'])
+	syn = total_subs - non_syn
+	#append the results onto the base results file
+	results = results.append({'gene':file, 'dN':non_syn, 'dS':syn},ignore_index=True)
+	
+#save the results file once the loop has finished
+results.to_csv("between_final_counts.csv", header=True, index=None)
+
+	
+	
+#want to look at the start codons of each gene
+#need to use the nucleotide sequences, rather than the alignment, as the gaps move the first codon
+#move into this folder
+cd ~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/
+cat > start_codon.csv
+gene,mb,ml
+
+#start python
+python
+
+from pathlib import Path
+from Bio import SeqIO
+import numpy as np
+import pandas as pd
+
+results = pd.read_csv("start_codon.csv", header='infer', delimiter = ',')
+
+directory = ''
+pathlist = Path(directory).glob('*.sorted')
+for file in pathlist:
+	nuc_seq = list(SeqIO.parse(file, "fasta")) # read each alignment
+	mb_seq = nuc_seq[0] #set first seq as mb file
+	ml_seq = nuc_seq[1] #set second as ml file (should already be in this order as they are sorted)
+	#split up the sequences into codons
+	mb_codon1 = [(mb_seq.seq)[0:3]]
+	ml_codon1 = [(ml_seq.seq)[0:3]]
+	#create empty lists for the translated amino acids to sit in
+	mb_prot = mb_codon1[0].translate()
+	ml_prot = ml_codon1[0].translate()
+	results = results.append({'gene':file, 'mb':mb_prot[0], 'ml':ml_prot[0]},ignore_index=True)
+	
+false_start = results.loc[(results['mb'] != 'M') | (results['ml'] != 'M')]
+false_start.to_csv("wrong_startcodon_genes.csv", header=True, index=None)
+right_start = results.loc[(results['mb'] == 'M') & (results['ml'] == 'M')]
+right_start.to_csv("right_startcodon_genes.csv", header=True, index=None)
+	
+	
+#PNPS AND LENGTH
+####using snpeff and python to get out the within species counts for the MK testing
+#first need to add in myotis myotis into the snpeff database
+#this does not need to be reproduced once it has been done once in your setup
+
+#following the instructions on the snpeff website 
+#move into your snpeff database
+cd ~/snpEff
+
+#add in your new genome to the end of the snpeff config file
+vim snpEff.config #add in the folowoing two lines
+# Myotis_myotis genome, version GCF_014108235.1
+myomyo.GCF.genome : myomyo.GCF
+
+#2.create a directory for the new genome in the data directory in snpEff, make also directory for genomes
+cd ~/snpEff/data
+mkdir myomyo.GCF
+cd myomyo.GCF
+
+#3. locate the gtf file for genome annotation (snpeff prefers the gtf)
+#for me this is in the myotis myotis folder, so move into this
+cd ~/Datafiles/Bats/myomyo
+#copy over the gtf file and rename it 
+cp GCF_014108235.1_mMyoMyo1.p_genomic.gtf ~/snpEff/data/myomyo.GCF/genes.gtf.gz
+
+#4. locate the reference genome sequence in fasta format (DNA (nuc)), and copy into genomes file
+#for me this is in the myotis myotis folder, which we are already in
+cp GCF_014108235.1_mMyoMyo1.p_genomic.fna ~/snpEff/data/myomyo.GCF/sequences.fa
+#need to zip this file
+gzip ~/snpEff/data/myomyo.GCF/sequences.fa
+
+#5. build a annotation database from gtf file and fasta
+#cd back to the base snpEff directory
+cd ~/snpEff
+#build database
+java -jar snpEff.jar build -gtf22 -v myomyo.GCF
+
+#tried to check with the cds sequences, but this hasn't really worked. Looks like the annotation has worked nicely anyway
+
+
+#now can run the snp eff and looping!
+#create nice folder to carry out this work in
+cd ~/Datafiles/Bats/GCF_rerun_0821
+mkdir snpeff
+mkdir snpeff/myoluc
+mkdir snpeff/myobra
+mkdir snpeff/myoluc/chrom_vcfs
+mkdir snpeff/myobra/chrom_vcfs
+
+##########################################MYOTIS LUCIFUGUS
+#move into folder with the whole vcf in
+cd ~/Datafiles/Bats/myoluc/indvs/remapping_myomyo/vcfs/
+
+#create file with all the chromosome names in
+bcftools query -f '%CHROM\n' combined.indv.v1.vcf | uniq > myoluc_chrom.txt
+
+#get out the individual chromosome vcfs
+while read chrom; do
+	bcftools view combined.indv.v1.vcf.gz -r ${chrom} -o ~/Datafiles/Bats/GCF_rerun_0821/snpeff/myoluc/chrom_vcfs/${chrom}.vcf -O v
+done < myoluc_chrom.txt
+
+#move into chrom_vcfs folder, and create ann_vcfs folder to put the annotated vcfs files in
+cd ~/Datafiles/Bats/GCF_rerun_0821/snpeff/myoluc/chrom_vcfs
+mkdir ann_vcfs
+
+#annotate all the chromosome vcf files
+for chrom in *.vcf; do
+java -Xmx8g -jar ~/snpEff/snpEff.jar -no-downstream -no-intergenic -no-intron -no-upstream -no-utr -onlyProtein myomyo.GCF ${chrom} > ann_vcfs/${chrom}.ann;
+done
+
+#create directories for filtering
+#move into folder
+cd ann_vcfs
+#make folder for info files, which will then be turned into csvs
+mkdir info_csvs
+
+##filter all annotated vcf files and create info csv for each
+for chrom in *.vcf.ann; do
+cat ${chrom} | java -jar ~/snpEff/SnpSift.jar filter " ( QUAL >= 30 ) & ( AF < 1 ) & (ANN[*].BIOTYPE = 'protein_coding') " > ${chrom}.f1; #filtering for quality above 30, allele freq less than 1, and protein coding only
+bcftools filter -e 'N_ALT > 1' ${chrom}.f1 > ${chrom}.filtered; #filter for sites that only have one alternative allele
+rm ${chrom}.f1;
+java -jar ~/snpEff/SnpSift.jar extractFields ${chrom}.filtered "CHROM" "POS" "ANN[*].GENEID" "ANN[*].EFFECT" > info_csvs/${chrom}.info; #get out only desired columns from the annotated vcf
+done
+
+#now need to grep out synonymous and nonsynonymous variants, so can count them
+#first take out the frameshift entries
+cd info_csvs
+mkdir no_frameshift
+
+for info in *.info; do
+grep -v 'frameshift' ${info} > no_frameshift/${info}.noFS;
+done
+
+#then for each grep out the non-syn and syn for each
+for info in *info; do
+grep 'missense_variant\|start_lost\|stop_gained\|stop_lost\|5_prime_UTR_premature_start_codon_gain_variant\|frameshift_variant' ${info} > ${info}.nonsyn;
+grep -v 'missense_variant\|start_lost\|stop_gained\|stop_lost\|5_prime_UTR_premature_start_codon_gain_variant\|frameshift_variant' ${info} > ${info}.syn;
+done
+
+#repeat this for non-frameshift
+cd no_frameshift
+for info in *info.noFS; do
+grep 'missense_variant\|start_lost\|stop_gained\|stop_lost\|5_prime_UTR_premature_start_codon_gain_variant' ${info} > ${info}.nonsyn;
+grep -v 'missense_variant\|start_lost\|stop_gained\|stop_lost\|5_prime_UTR_premature_start_codon_gain_variant' ${info} > ${info}.syn;
+done
+
+##need to remove the first header line from info and synonymous files (nonsyn does not have this)
+# in no_frameshift
+sed -i '1d' *.info.noFS
+sed -i '1d' *info.noFS.syn
+
+#remove any chromosomes where all the files (.info, .info.syn, .info.nonsyn) have 0 bytes
+#find the empties
+ls -l
+rm NC_029346.1.vcf.ann.in* NW_023416385.1.vcf.ann.in* NW_023416386.1.vcf.ann.in* NW_023416387.1.vcf.ann.in* NW_023416391.1.vcf.ann.in* NW_023416392.1.vcf.ann.in* NW_023416393.1.vcf.ann.in* NW_023416395.1.vcf.ann.in* NW_023416397.1.vcf.ann.in* NW_023416399.1.vcf.ann.in* NW_023416400.1.vcf.ann.in* NW_023416402.1.vcf.ann.in* NW_023416403.1.vcf.ann.in* NW_023416404.1.vcf.ann.in* NW_023416365.1.vcf.ann.in*
+
+#in normal folder
+cd ..
+sed -i '1d' *.info
+sed -i '1d' *info.syn
+
+#remove any chromosomes where all the files (.info, .info.syn, .info.nonsyn) have 0 bytes
+#find the empties
+ls -l
+rm NC_029346.1.vcf.ann.in* NW_023416385.1.vcf.ann.in* NW_023416386.1.vcf.ann.in* NW_023416387.1.vcf.ann.in* NW_023416391.1.vcf.ann.in* NW_023416392.1.vcf.ann.in* NW_023416393.1.vcf.ann.in* NW_023416395.1.vcf.ann.in* NW_023416397.1.vcf.ann.in* NW_023416399.1.vcf.ann.in* NW_023416400.1.vcf.ann.in* NW_023416402.1.vcf.ann.in* NW_023416403.1.vcf.ann.in* NW_023416404.1.vcf.ann.in* NW_023416365.1.vcf.ann.in* 
+#all of the empties are the same chroms in frameshift and non-frameshift
+
+#need to create a file with the chromosome suffixes and a proto dictionary file for both
+#start in normal folder
+#first get the chromosome names out from the file names
+ls *.info > file_names
+#delete the file .info suffixes
+sed -i 's/.info//g' file_names
+
+#create file for proto dictionary file to go
+touch proto_dict
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["'${i}'.info", "'${i}'.info.syn", "'${i}'.info.nonsyn"]' >> proto_dict;
+done
+
+#make directory for files to go in
+mkdir final_counts
+
+##repeat these steps in the no_frameshift directory
+cd no_frameshift
+
+#need to create a file with the chromosome suffixes and a proto dictionary file for both
+#first get the chromosome names out from the file names
+ls *.info.noFS > file_names
+#delete the file .info suffixes
+sed -i 's/.info.noFS//g' file_names
+
+#create file for proto dictionary file to go
+touch proto_dict
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["'${i}'.info.noFS", "'${i}'.info.noFS.syn", "'${i}'.info.noFS.nonsyn"]' >> proto_dict;
+done
+
+#make directory for files to go in
+mkdir final_counts
+
+###create screens for both, and run the following python script
+python
+#set package
+import pandas as pd
+#read in file with chrom names in 
+names = pd.read_csv("file_names", header=None)
+#read in the created proto_dict file
+proto = pd.read_csv("proto_dict", header=None, sep='\t')
+#join together
+df = pd.concat([names, proto], axis=1)
+#name the columns
+df.columns = ["name", "list"]
+#change so values will be treated separately (allows the creation of the dictionary)
+df['list'] = df['list'].apply(eval)
+#create dictionary
+dictionary = dict(zip(df.name, df.list))
+
+#access each of the names
+for key,value in dictionary.items():
+	data_file_delimiter = '\t'
+	
+	#create the total info csv first
+	total = value[0] 
+	#set an empty file for the maximum column count
+	total_col_count = 0
+	with open(total, 'r') as temp_f:
+		#read the lines
+		total_lines = temp_f.readlines()
+		
+		for l in total_lines:
+			#count the column count for the current line
+			column_count = len(l.split(data_file_delimiter)) + 1
+			
+			#set the most column count
+			total_col_count = column_count if total_col_count < column_count else total_col_count
+			
+	#generate column names (will be 0,1,2,3,... total_col_count -1)
+	total_col_names = [i for i in range(0, total_col_count)]
+	
+	#read in total info data as csv
+	total_csv = pd.read_csv(total, header=None, delimiter=data_file_delimiter, names=total_col_names)
+	
+	#create the syn csv
+	syn = value[1] 
+	#set an empty file for the maximum column count
+	syn_col_count = 0
+	with open(syn, 'r') as temp_g:
+		#read the lines
+		syn_lines = temp_g.readlines()
+		
+		for n in total_lines:
+			#count the column count for the current line
+			column_count_s = len(n.split(data_file_delimiter)) + 1
+			
+			#set the most column count
+			syn_col_count = column_count_s if syn_col_count < column_count_s else syn_col_count
+			
+	#generate column names (will be 0,1,2,3,... total_col_count -1)
+	syn_col_names = [i for i in range(0, syn_col_count)]
+	
+	#read in syn info data as csv
+	syn_csv = pd.read_csv(syn, header=None, delimiter=data_file_delimiter, names=syn_col_names)
+	
+	#create the nsyn csv
+	nsyn = value[2] 
+	#set an empty file for the maximum column count
+	nsyn_col_count = 0
+	with open(nsyn, 'r') as temp_h:
+		#read the lines
+		nsyn_lines = temp_h.readlines()
+		
+		for e in total_lines:
+			#count the column count for the current line
+			column_count_ns = len(e.split(data_file_delimiter)) + 1
+			
+			#set the most column count
+			nsyn_col_count = column_count_ns if nsyn_col_count < column_count_ns else nsyn_col_count
+			
+	#generate column names (will be 0,1,2,3,... total_col_count -1)
+	nsyn_col_names = [i for i in range(0, nsyn_col_count)]
+	
+	#read in syn info data as csv
+	nsyn_csv = pd.read_csv(nsyn, header=None, delimiter=data_file_delimiter, names=nsyn_col_names)
+	
+	#gives a dtype warning but still seems to be working
+	
+	#get sum values for each
+	total_no = total_csv[2].value_counts().sort_index().fillna(0)
+	total_syn = syn_csv[2].value_counts().sort_index().fillna(0)
+	total_nsyn = nsyn_csv[2].value_counts().sort_index().fillna(0)
+	syn_check = total_no - total_nsyn
+	
+	frame = { 'Total': total_no, 'Non-syn': total_nsyn, 'Syn': total_syn, 'Syn_check': syn_check}
+	final_counts = pd.DataFrame(frame)
+	#fill any missing values in as zeroes
+	final_counts = final_counts.fillna(0)
+	#convert to integers rather than decimals
+	final_counts = final_counts.astype(int)
+	
+	
+	final_counts.to_csv('final_counts/' + key + '.final_counts.csv', header=True, index=True)
+	
+
+
+
+
+#####checking
+#I'd like to check that all the genes are uniq to their own chromosome
+cd final_counts
+
+touch gene_check
+
+for i in *.csv; do
+cat ${i}| awk -F "," '{ print $1 }' >> gene_check;
+done
+
+#check number of genes
+cat gene_check | wc -l
+#18 947
+
+#check if there are any duplicate
+sort gene_check | uniq -D
+#no duplicates found
+
+#now need to concat all the files together
+touch genome_myoluc_MK_within.csv
+
+for i in *counts.csv; do
+cat ${i} >> genome_myoluc_MK_within.csv;
+done
+
+
+#use python to check if the syn_check is accurate
+python
+import pandas as pd
+import numpy as np
+#read in file
+pnps = pd.read_csv("genome_myoluc_MK_within.csv", header='infer', index_col=0)
+#add in binary check whether syn and syn_check match
+pnps['Check'] = np.where( pnps['Syn'] == pnps['Syn_check'] , '1', '0')
+
+#get out rows that do not pass the check
+pnps.loc[(pnps['Check'] == '0') ] #1486
+pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] == '0')] #1409
+pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] != '0')]
+check = pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] != '0')]
+check.loc[(check['Total'] == 'Total')] #77
+check.loc[(check['Total'] != 'Total')]
+#check if there are any checks that aren't the headers being included in
+#all of them are, lovely stuff
+
+
+#repeat for the no_frameshift
+cd ../no_frameshift/final_counts
+
+#now need to concat all the files together
+touch genome_myoluc_noFS_MK_within.csv
+
+for i in *counts.csv; do
+cat ${i} >> genome_myoluc_noFS_MK_within.csv;
+done
+
+#5 less genes in the non_frameshift (18 946)
+
+python
+import pandas as pd
+import numpy as np 
+
+pnps = pd.read_csv("genome_myoluc_noFS_MK_within.csv", header='infer', index_col=0)
+#add in binary check whether syn and syn_check match
+pnps['Check'] = np.where( pnps['Syn'] == pnps['Syn_check'] , '1', '0')
+
+#get out rows that do not pass the check
+pnps.loc[(pnps['Check'] == '0') ] #1 567
+pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] == '0')] #1490
+pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] != '0')] #77
+check = pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] != '0')]
+check.loc[(check['Total'] == 'Total')] #77
+check.loc[(check['Total'] != 'Total')]
+#check if there are any checks that aren't the headers being included in
+#there are not, which is nice
+
+
+##########################################MYOTIS BRANDTII
+
+#move into folder with the whole vcf in
+cd ~/Datafiles/Bats/myobra/indvs/23.02.21_remapping_to_Mmyo/vcfs
+
+#create file with all the chromosome names in
+bcftools query -f '%CHROM\n' combined.indv.v1.vcf | uniq > myobra_chrom.txt
+
+#need to zip the combined.indv.v1.vcf file
+#copy it first
+cp combined.indv.v1.vcf safe.combined.indv.v1.vcf
+bgzip combined.indv.v1.vcf
+#need to also index this
+bcftools index combined.indv.v1.vcf.gz
+
+#get out the individual chromosome vcfs
+while read chrom; do
+	bcftools view combined.indv.v1.vcf.gz -r ${chrom} -o ~/Datafiles/Bats/GCF_rerun_0821/snpeff/myobra/chrom_vcfs/${chrom}.vcf -O v
+done < myobra_chrom.txt
+
+#move into chrom_vcfs folder, and create ann_vcfs folder to put the annotated vcfs files in
+cd ~/Datafiles/Bats/GCF_rerun_0821/snpeff/myobra/chrom_vcfs
+mkdir ann_vcfs
+
+#annotate all the chromosome vcf files
+for chrom in *.vcf; do
+java -Xmx8g -jar ~/snpEff/snpEff.jar -no-downstream -no-intergenic -no-intron -no-upstream -no-utr -onlyProtein myomyo.GCF ${chrom} > ann_vcfs/${chrom}.ann;
+done
+
+#create directories for filtering
+#move into folder
+cd ann_vcfs
+#make folder for info files, which will then be turned into csvs
+mkdir info_csvs
+
+##filter all annotated vcf files and create info csv for each
+for chrom in *.vcf.ann; do
+cat ${chrom} | java -jar ~/snpEff/SnpSift.jar filter " ( QUAL >= 30 ) & ( AF < 1 ) & (ANN[*].BIOTYPE = 'protein_coding') " > ${chrom}.f1; #filtering for quality above 30, allele freq less than 1, and protein coding only
+bcftools filter -e 'N_ALT > 1' ${chrom}.f1 > ${chrom}.filtered; #filter for sites that only have one alternative allele
+rm ${chrom}.f1;
+java -jar ~/snpEff/SnpSift.jar extractFields ${chrom}.filtered "CHROM" "POS" "ANN[*].GENEID" "ANN[*].EFFECT" > info_csvs/${chrom}.info; #get out only desired columns from the annotated vcf
+done
+
+#now need to grep out synonymous and nonsynonymous variants, so can count them
+#first take out the frameshift entries
+cd info_csvs
+mkdir no_frameshift
+
+for info in *.info; do
+grep -v 'frameshift' ${info} > no_frameshift/${info}.noFS;
+done
+
+#then for each grep out the non-syn and syn for each
+for info in *info; do
+grep 'missense_variant\|start_lost\|stop_gained\|stop_lost\|5_prime_UTR_premature_start_codon_gain_variant\|frameshift_variant' ${info} > ${info}.nonsyn;
+grep -v 'missense_variant\|start_lost\|stop_gained\|stop_lost\|5_prime_UTR_premature_start_codon_gain_variant\|frameshift_variant' ${info} > ${info}.syn;
+done
+
+#repeat this for non-frameshift
+cd no_frameshift
+for info in *info.noFS; do
+grep 'missense_variant\|start_lost\|stop_gained\|stop_lost\|5_prime_UTR_premature_start_codon_gain_variant' ${info} > ${info}.nonsyn;
+grep -v 'missense_variant\|start_lost\|stop_gained\|stop_lost\|5_prime_UTR_premature_start_codon_gain_variant' ${info} > ${info}.syn;
+done
+
+#remove any chromosomes where all the files (.info, .info.syn, .info.nonsyn) have 0 bytes
+#find the empties
+ls -l
+rm NC_029346.1.vcf.ann.in* NW_023416384.1.vcf.ann.in* NW_023416385.1.vcf.ann.in* NW_023416386.1.vcf.ann.in* NW_023416387.1.vcf.ann.in* NW_023416391.1.vcf.ann.in* NW_023416392.1.vcf.ann.in* NW_023416393.1.vcf.ann.in* NW_023416395.1.vcf.ann.in* NW_023416397.1.vcf.ann.in* NW_023416398.1.vcf.ann.in* NW_023416399.1.vcf.ann.in* NW_023416400.1.vcf.ann.in* NW_023416402.1.vcf.ann.in* NW_023416403.1.vcf.ann.in* NW_023416404.1.vcf.ann.in* 
+
+#in normal folder
+cd ..
+sed -i '1d' *.info
+sed -i '1d' *info.syn
+
+#remove any chromosomes where all the files (.info, .info.syn, .info.nonsyn) have 0 bytes
+#find the empties and delete
+ls -l
+rm NC_029346.1.vcf.ann.in* NW_023416384.1.vcf.ann.in* NW_023416385.1.vcf.ann.in* NW_023416386.1.vcf.ann.in* NW_023416387.1.vcf.ann.in* NW_023416391.1.vcf.ann.in* NW_023416392.1.vcf.ann.in* NW_023416393.1.vcf.ann.in* NW_023416395.1.vcf.ann.in* NW_023416397.1.vcf.ann.in* NW_023416398.1.vcf.ann.in* NW_023416399.1.vcf.ann.in* NW_023416400.1.vcf.ann.in* NW_023416402.1.vcf.ann.in* NW_023416403.1.vcf.ann.in* NW_023416404.1.vcf.ann.in* 
+
+#need to create a file with the chromosome suffixes and a proto dictionary file for both
+#start in normal folder
+#first get the chromosome names out from the file names
+ls *.info > file_names
+#delete the file .info suffixes
+sed -i 's/.info//g' file_names
+
+#create file for proto dictionary file to go
+touch proto_dict
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["'${i}'.info", "'${i}'.info.syn", "'${i}'.info.nonsyn"]' >> proto_dict;
+done
+
+#make directory for files to go in
+mkdir final_counts
+
+##repeat these steps in the no_frameshift directory
+cd no_frameshift
+
+#need to create a file with the chromosome suffixes and a proto dictionary file for both
+#first get the chromosome names out from the file names
+ls *.info.noFS > file_names
+#delete the file .info suffixes
+sed -i 's/.info.noFS//g' file_names
+
+#create file for proto dictionary file to go
+touch proto_dict
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["'${i}'.info.noFS", "'${i}'.info.noFS.syn", "'${i}'.info.noFS.nonsyn"]' >> proto_dict;
+done
+
+#make directory for files to go in
+mkdir final_counts
+
+#set up the following code for both
+python
+#set package
+import pandas as pd
+#read in file with chrom names in 
+names = pd.read_csv("file_names", header=None)
+#read in the created proto_dict file
+proto = pd.read_csv("proto_dict", header=None, sep='\t')
+#join together
+df = pd.concat([names, proto], axis=1)
+#name the columns
+df.columns = ["name", "list"]
+#change so values will be treated separately (allows the creation of the dictionary)
+df['list'] = df['list'].apply(eval)
+#create dictionary
+dictionary = dict(zip(df.name, df.list))
+
+#access each of the names
+for key,value in dictionary.items():
+	data_file_delimiter = '\t'
+	
+	#create the total info csv first
+	total = value[0] 
+	#set an empty file for the maximum column count
+	total_col_count = 0
+	with open(total, 'r') as temp_f:
+		#read the lines
+		total_lines = temp_f.readlines()
+		
+		for l in total_lines:
+			#count the column count for the current line
+			column_count = len(l.split(data_file_delimiter)) + 1
+			
+			#set the most column count
+			total_col_count = column_count if total_col_count < column_count else total_col_count
+			
+	#generate column names (will be 0,1,2,3,... total_col_count -1)
+	total_col_names = [i for i in range(0, total_col_count)]
+	
+	#read in total info data as csv
+	total_csv = pd.read_csv(total, header=None, delimiter=data_file_delimiter, names=total_col_names)
+	
+	#create the syn csv
+	syn = value[1] 
+	#set an empty file for the maximum column count
+	syn_col_count = 0
+	with open(syn, 'r') as temp_g:
+		#read the lines
+		syn_lines = temp_g.readlines()
+		
+		for n in total_lines:
+			#count the column count for the current line
+			column_count_s = len(n.split(data_file_delimiter)) + 1
+			
+			#set the most column count
+			syn_col_count = column_count_s if syn_col_count < column_count_s else syn_col_count
+			
+	#generate column names (will be 0,1,2,3,... total_col_count -1)
+	syn_col_names = [i for i in range(0, syn_col_count)]
+	
+	#read in syn info data as csv
+	syn_csv = pd.read_csv(syn, header=None, delimiter=data_file_delimiter, names=syn_col_names)
+	
+	#create the nsyn csv
+	nsyn = value[2] 
+	#set an empty file for the maximum column count
+	nsyn_col_count = 0
+	with open(nsyn, 'r') as temp_h:
+		#read the lines
+		nsyn_lines = temp_h.readlines()
+		
+		for e in total_lines:
+			#count the column count for the current line
+			column_count_ns = len(e.split(data_file_delimiter)) + 1
+			
+			#set the most column count
+			nsyn_col_count = column_count_ns if nsyn_col_count < column_count_ns else nsyn_col_count
+			
+	#generate column names (will be 0,1,2,3,... total_col_count -1)
+	nsyn_col_names = [i for i in range(0, nsyn_col_count)]
+	
+	#read in syn info data as csv
+	nsyn_csv = pd.read_csv(nsyn, header=None, delimiter=data_file_delimiter, names=nsyn_col_names)
+	
+	#gives a dtype warning but still seems to be working
+	
+	#get sum values for each
+	total_no = total_csv[2].value_counts().sort_index().fillna(0)
+	total_syn = syn_csv[2].value_counts().sort_index().fillna(0)
+	total_nsyn = nsyn_csv[2].value_counts().sort_index().fillna(0)
+	syn_check = total_no - total_nsyn
+	
+	frame = { 'Total': total_no, 'Non-syn': total_nsyn, 'Syn': total_syn, 'Syn_check': syn_check}
+	final_counts = pd.DataFrame(frame)
+	#fill any missing values in as zeroes
+	final_counts = final_counts.fillna(0)
+	#convert to integers rather than decimals
+	final_counts = final_counts.astype(int)
+	
+	
+	final_counts.to_csv('final_counts/' + key + '.final_counts.csv', header=True, index=True)
+	
+
+#checking
+#I'd like to check that all the genes are uniq to their own chromosome
+cd final_counts
+
+touch gene_check
+
+for i in *.csv; do
+cat ${i}| awk -F "," '{ print $1 }' >> gene_check;
+done
+
+#check number of genes
+cat gene_check | wc -l
+#18 253
+
+#check if there are any duplicate
+sort gene_check | uniq -D
+#no duplicates found
+
+#now need to concat all the files together
+touch genome_myobra_MK_within.csv
+
+for i in *counts.csv; do
+cat ${i} >> genome_myobra_MK_within.csv;
+done
+
+
+#use python to check if the syn_check is accurate
+python
+import pandas as pd
+import numpy as np
+#read in file
+pnps = pd.read_csv("genome_myobra_MK_within.csv", header='infer', index_col=0)
+#add in binary check whether syn and syn_check match
+pnps['Check'] = np.where( pnps['Syn'] == pnps['Syn_check'] , '1', '0')
+
+#get out rows that do not pass the check
+pnps.loc[(pnps['Check'] == '0') ]
+pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] == '0')]
+pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] != '0')]
+check = pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] != '0')]
+check.loc[(check['Total'] == 'Total')]
+#check if there are any checks that aren't the headers being included in
+#all of them are, lovely stuff
+
+
+#repeat for the no_frameshift
+cd ../no_frameshift/final_counts
+
+#now need to concat all the files together
+touch genome_myoluc_noFS_MK_within.csv
+
+for i in *counts.csv; do
+cat ${i} >> genome_myoluc_noFS_MK_within.csv;
+done
+
+#18 less genes in the non_frameshift (18 238)
+
+#use python to check if the syn_check is accurate
+python
+import pandas as pd
+import numpy as np
+#read in file
+pnps = pd.read_csv("genome_myobra_noFS_MK_within.csv", header='infer', index_col=0)
+#add in binary check whether syn and syn_check match
+pnps['Check'] = np.where( pnps['Syn'] == pnps['Syn_check'] , '1', '0')
+
+#get out rows that do not pass the check
+pnps.loc[(pnps['Check'] == '0') ]
+pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] == '0')]
+pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] != '0')]
+check = pnps.loc[(pnps['Check'] == '0') & (pnps['Non-syn'] != '0')]
+check.loc[(check['Total'] == 'Total')]
+#check if there are any checks that aren't the headers being included in
+#all of them are, lovely stuff
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+######ADD TO THE END OF YN00 NEAT
+#need to create lookup file to rename the genes from dnds
+#go to yn00 folder
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00
+
+#use python to get the names needed out of the file
+#this now gives me the gene names from the dnds in clean format
+python
+import pandas as pd
+df = pd.read_csv("betweenspp_data_MK.csv", header='infer', index_col=0)
+names = df['Genes']
+names.to_csv("gene_names.csv", header=False, index=False)
+
+#remove the myoMyo_ bit from each
+sed -i 's/myoMyo_//' gene_names.csv
+
+#get out one CDS line for each gene
+touch lookup_genes
+
+for line in $(cat gene_names.csv); do
+grep ${line} ~/Datafiles/Bats/myomyo/prot/GCF_myomyo_CDS.gff | head -n 1 >> lookup_genes;
+done
+
+#this takes out only the Parent and gene 
+sed -i -nE 's/.*Parent=([^;]*).*gene=([^;]*).*/\1 \2/p' lookup_genes
+
+#add back in the myoMyo_ bit to each gene name
+sed -i 's/rna-/myoMyo_rna-/' lookup_genes
+
+#open python, and merge the dnds folder with the lookup file
+python
+import pandas as pd
+df = pd.read_csv("betweenspp_data_MK.csv", header='infer', index_col=0)
+#read in the lookup, a space is the delimiter
+lookup = pd.read_csv("lookup_genes", header=None, index_col=0, delimiter=' ')
+
+#join the tables together by the myoMyo format gene name
+renamed = df.join(lookup, on='Genes')
+
+#read out the transformed dataframe
+renamed.to_csv("renamed_betweenspp_data_MK.csv", header='infer', index=False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#################CREATE A MK folder, and put this script into MK testing
+#go into the rerun directory
+cd ~/Datafiles/Bats/GCF_rerun_0821/
+#make directory for MK test
+mkdir MK_tests
+
+#in python, combine with the renamed between spp table
+#dnds: yn00/renamed_betweenspp_data_MK.csv
+
+#myoluc
+#all: snpeff/myoluc/chrom_vcfs/ann_vcfs/info_csvs/final_counts/genome_myoluc_MK_within.csv
+#noFS: snpeff/myoluc/chrom_vcfs/ann_vcfs/info_csvs/no_frameshift/final_counts/genome_myoluc_noFS_MK_within.csv
+
+
+python
+import pandas as pd
+#read in the dnds, with the gene names as the index
+dnds = pd.read_csv("yn00/renamed_betweenspp_data_MK.csv", header='infer', index_col=3)
+
+#read in the everything pnps (inc frameshift), with the gene name col as the index
+#SELECT AS APPROPRIATE
+#myoluc all
+#pnps = pd.read_csv("snpeff/myoluc/chrom_vcfs/ann_vcfs/info_csvs/final_counts/genome_myoluc_MK_within.csv", header='infer', index_col=0)
+#myoluc no frameshift
+#pnps = pd.read_csv("snpeff/myoluc/chrom_vcfs/ann_vcfs/info_csvs/no_frameshift/final_counts/genome_myoluc_noFS_MK_within.csv", header='infer', index_col=0)
+#myobra all 
+#pnps = pd.read_csv("snpeff/myobra/chrom_vcfs/ann_vcfs/info_csvs/final_counts/genome_myobra_MK_within.csv", header='infer', index_col=0)
+#myobra no frameshift 
+#pnps = pd.read_csv("snpeff/myobra/chrom_vcfs/ann_vcfs/info_csvs/no_frameshift/final_counts/genome_myoluc_noFS_MK_within.csv", header='infer', index_col=0)
+
+#join the tables together by the indexes, which are the gene names
+MK_table = dnds.join(pnps)
+#drop the unneeded columns
+MK_table.drop(['Genes', 'Total', 'Syn_check'], axis=1, inplace=True)
+#rename the columns #SELECT AS APPROPRIATE
+#MK_table.rename(columns={"S": "dS", "N": "dN", "Non-syn": "pN", "Syn": "pS"}, inplace=True)
+#MK_table.rename(columns={"S": "dS", "N": "dN", "Non-sny": "pN", "Syn": "pS"}, inplace=True)
+#reorder the columns
+MK_table = MK_table[['dN', 'dS', 'pN', 'pS']]
+
+MK_table = MK_table.convert_dtypes(convert_floating=True)
+MK_table['pN'] = MK_table['pN'].astype(float)
+MK_table['pS'] = MK_table['pS'].astype(float)
+MK_table["alpha"] = 1 - ((MK_table["dS"] * MK_table["pN"]) / (MK_table["dN"] * MK_table["pS"]))
+
+#write out the results table #SELECT AS APPROPRIATE
+#MK_table.to_csv("MK_tests/myoluc_whole_results.csv", header='infer', index=True)
+#MK_table.to_csv("MK_tests/myoluc_noFS_whole_results.csv", header='infer', index=True)
+#MK_table.to_csv("MK_tests/myobra_whole_results.csv", header='infer', index=True)
+#MK_table.to_csv("MK_tests/myobra_noFS_whole_results.csv", header='infer', index=True)
+
+#port to R, to carry out neutrality test and fisher's exact testing
+
+
+
+
+
+
+
+
+
+
+#####WELCH MK PARAMETERS
+#need the number of potential sites for between and within sites
+#between
+N S
+ 83.3   306.7  
+ #within
+ 89.4   318.6 
+ 
+for f in *.fasta.nuc; do
+head -n 2 ${f} > testout/${f};
+head -n 2 ${f} >> testout/${f};
+done
+
+#in the yn00, have moved all the pairwise stuff into new between spp directory
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00
+mkdir between
+#move all previous work into the between folder
+
+#make folders for next section
+mkdir within
+mkdir within/myobra
+mkdir within/myoluc
+mkdir within/myobra/nuc_seq
+mkdir within/myoluc/nuc_seq
+mkdir within/myobra/ctl_files
+mkdir within/myoluc/ctl_files
+mkdir within/myobra/output
+mkdir within/myoluc/output
+mkdir within/myobra/output/grepped_lines
+mkdir within/myoluc/output/grepped_lines
+
+
+
+#####HAVE MOVED ALL OF THE OLD YN00 BASED ON THE NUC_SEQS INTO DEPREC_NUCSEQ FOLDER, NOW WILL REPLACE ALL WITH MSA BASE, AND REDO
+
+#move to folder where the pairwise unaligned nucleotide sequences are held
+cd ~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/
+
+#turning the nuc_msa from interleaved msa for the sequence to be in one line
+for f in *.nuc.MSA; do
+awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' ${f} > ${f}.line;
+sed -i -e '$a\' ${f}.line;
+done
+
+
+#getting the first two lines (mb) and concatting them twice into the same file, and doing the same for ml and the last two lines of the file
+#read all files
+for f in *.nuc.MSA.line; do
+head -n 2 ${f} > ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/nuc_seq/${f};
+head -n 2 ${f} >> ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/nuc_seq/${f};
+tail -n 2 ${f} > ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/nuc_seq/${f};
+tail -n 2 ${f} >> ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/nuc_seq/${f};
+done
+
+#making the control files
+#create the ctl make file in each seq directory
+#myobra
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/nuc_seq
+
+#create a perl script to make ctl files, based on the perl makefile used for PAML
+cat > yn00_ctl_make.perl
+
+
+#define file array
+my @files = <*.nuc.MSA.line>;
+
+for my $file(@files){
+		my @filename = split /\./, $file;
+		my $outfile = "/pub59/florawf/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/ctl_files/@filename[0].1.ctl";
+		open OUTFILE, ">$outfile" or die "Cannot open $outfile: $!";
+		print OUTFILE "seqfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/nuc_seq/@filename[0].1.nuc.MSA.line\n";
+		print OUTFILE "outfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output/@filename[0].1.txt\n";
+		print OUTFILE "verbose = 0 * 1: detailed output (list sequences), 0: concise output\n";
+		print OUTFILE "icode = 0 * 0:universal code; 1:mammalian mt; 2-10:see below\n";
+		print OUTFILE "weighting = 0 * weighting pathways between codons (0/1)?\n";
+		print OUTFILE "commonf3x4 = 0 * use one set of codon freqs for all pairs (0/1)?\n";		
+		close OUTFILE;
+				}
+		
+
+
+#####
+
+
+#run the perl script
+perl yn00_ctl_make.perl
+
+#move back to the yn00 ctl_files directory
+cd ../ctl_files/
+ 
+#create a screen to run, and set in the paml py27 environment
+#make sure you are in the correct ctl directory
+for f in *.ctl
+do
+yn00 $f
+done
+
+#myoluc
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/nuc_seq
+
+#create a perl script to make ctl files, based on the perl makefile used for PAML
+cat > yn00_ctl_make.perl
+
+
+#define file array
+my @files = <*.nuc.MSA.line>;
+
+for my $file(@files){
+		my @filename = split /\./, $file;
+		my $outfile = "/pub59/florawf/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/ctl_files/@filename[0].1.ctl";
+		open OUTFILE, ">$outfile" or die "Cannot open $outfile: $!";
+		print OUTFILE "seqfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/nuc_seq/@filename[0].1.nuc.MSA.line\n";
+		print OUTFILE "outfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/output/@filename[0].1.txt\n";
+		print OUTFILE "verbose = 0 * 1: detailed output (list sequences), 0: concise output\n";
+		print OUTFILE "icode = 0 * 0:universal code; 1:mammalian mt; 2-10:see below\n";
+		print OUTFILE "weighting = 0 * weighting pathways between codons (0/1)?\n";
+		print OUTFILE "commonf3x4 = 0 * use one set of codon freqs for all pairs (0/1)?\n";		
+		close OUTFILE;
+				}
+		
+
+
+#####
+
+
+#run the perl script
+perl yn00_ctl_make.perl
+
+#move back to the yn00 ctl_files directory
+cd ../ctl_files/
+ 
+#create a screen to run, and set in the paml py27 environment
+#make sure you are in the correct ctl directory
+for f in *.ctl
+do
+yn00 $f
+done
+
+
+####
+#need to get out the right lines out of each - data is held on the 21st line from the bottom
+#myoluc
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/output
+
+for i in *.txt; do
+tail -n 21 ${i} | head -n 1 > grepped_lines/${i}.line;
+sed -i -e 's/\s\+/,/g' grepped_lines/${i}.line;
+done
+
+#myobra
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output
+
+for i in *.txt; do
+tail -n 21 ${i} | head -n 1 > grepped_lines/${i}.line;
+sed -i -e 's/\s\+/,/g' grepped_lines/${i}.line;
+done
+
+
+
+#####################
+#getting the lS values out of the grepped lines
+#myoluc
+~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/output/grepped_lines
+
+#make base file for results
+cat > results_base.csv 
+gene,S,N
+
+#start python
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+#read in csv base
+results = pd.read_csv("results_base.csv", header='infer', delimiter=',')
+
+#run the code to read out the N_S lines for each, then save after this has finished running
+directory = ''
+pathlist = Path(directory).glob('*.line')
+for file in pathlist:
+	line = pd.read_csv(file, header=None, delimiter=',')
+	S = line[3].values
+	N = line[4].values
+	results = results.append({'gene':file, 'S':S, 'N':N},ignore_index=True)
+results.to_csv("myoluc_lsln.csv", header='infer', index=None)	
+
+#myobra
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output/grepped_lines
+
+#make base file for results
+cat > results_base.csv 
+gene,S,N
+
+#start python
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+#read in csv base
+results = pd.read_csv("results_base.csv", header='infer', delimiter=',')
+
+#run the code to read out the N_S lines for each, then save after this has finished running
+directory = ''
+pathlist = Path(directory).glob('*.line')
+for file in pathlist:
+	line = pd.read_csv(file, header=None, delimiter=',')
+	S = line[3].values
+	N = line[4].values
+	results = results.append({'gene':file, 'S':S, 'N':N},ignore_index=True)
+results.to_csv("myobra_lsln.csv", header='infer', index=None)	
+
+	
+	
+	
+
+
+##################redo-ing the between lnls, 
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/
+mv grepped_lines lwl85_grepped_lines
+
+#make new directory
+mkdir grepped_lines
+
+for i in *.txt; do
+tail -n 21 ${i} | head -n 1 > grepped_lines/${i}.line;
+sed -i -e 's/\s\+/,/g' grepped_lines/${i}.line;
+done
+
+#move into grepped_lines folder
+cd grepped_lines
+
+#make base file for results
+cat > results_base.csv 
+gene,S,N
+
+#start python
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+#read in csv base
+results = pd.read_csv("results_base.csv", header='infer', delimiter=',')
+
+#run the code to read out the N_S lines for each, then save after this has finished running
+directory = ''
+pathlist = Path(directory).glob('*.line')
+for file in pathlist:
+	line = pd.read_csv(file, header=None, delimiter=',')
+	S = line[3].values
+	N = line[4].values
+	results = results.append({'gene':file, 'S':S, 'N':N},ignore_index=True)
+results.to_csv("between_lsln.csv", header='infer', index=None)	
+
+
+####need to modify all the files so they have the right names (either correct name or number)
+#lsln for myobra
+head ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output/grepped_lines/myobra_lsln.csv
+sed -i 's/.1.txt.line/.1/' ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output/grepped_lines/myobra_lsln.csv
+
+#lsln for myoluc
+head ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/output/grepped_lines/myoluc_lsln.csv
+sed -i 's/.1.txt.line/.1/' ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/output/grepped_lines/myoluc_lsln.csv
+
+#lnls for between spp
+~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/grepped_lines/between_lsln.csv
+sed -i 's/.1.txt.line/.1/' ~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/grepped_lines/between_lsln.csv
+
+#dnds
+head ~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/between_final_counts.csv
+sed -i 's/.1.nuc.MSA/.1/' ~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/between_final_counts.csv
+
+#filter for non-M starts - containing only M starts for mb and ml
+head ~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv
+sed -i 's/.1.fasta.nuc.sorted/.1/' ~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv
+
+###################### locating all the files
+#lsln for myobra
+~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output/grepped_lines/myobra_lsln.csv
+
+#lsln for myoluc
+~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/output/grepped_lines/myoluc_lsln.csv
+
+#lookup file for gene names
+~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes
+
+#lnls for between spp
+~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/grepped_lines/between_lsln.csv
+
+#pnps: myobra all
+~/Datafiles/Bats/GCF_rerun_0821/snpeff/myobra/chrom_vcfs/ann_vcfs/info_csvs/final_counts/genome_myobra_MK_within.csv
+#pnps: myobra no frameshift
+~/Datafiles/Bats/GCF_rerun_0821/snpeff/myobra/chrom_vcfs/ann_vcfs/info_csvs/no_frameshift/final_counts/genome_myobra_noFS_MK_within.csv
+#pnps: myoluc all
+~/Datafiles/Bats/GCF_rerun_0821/snpeff/myoluc/chrom_vcfs/ann_vcfs/info_csvs/final_counts/genome_myoluc_MK_within.csv  
+#pnps: myoluc no frameshift
+~/Datafiles/Bats/GCF_rerun_0821/snpeff/myoluc/chrom_vcfs/ann_vcfs/info_csvs/no_frameshift/final_counts/genome_myoluc_noFS_MK_within.csv
+
+#dnds
+~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/between_final_counts.csv
+
+#filter for non-M starts - containing only M starts for mb and ml
+~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv
+
+
+#setting up directories
+cd ~/Datafiles/Bats/GCF_rerun_0821/MK_tests
+mkdir myobra
+mkdir myoluc
+mkdir myobra/all
+mkdir myobra/noFS
+mkdir myoluc/all
+mkdir myoluc/noFS
+
+###myobra all
+#lsln for myobra
+~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output/grepped_lines/myobra_lsln.csv
+
+#lnls for between spp
+~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/grepped_lines/between_lsln.csv
+
+#lookup file for gene names
+~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes
+
+#pnps: myobra all
+~/Datafiles/Bats/GCF_rerun_0821/snpeff/myobra/chrom_vcfs/ann_vcfs/info_csvs/final_counts/genome_myobra_MK_within.csv
+
+#dnds
+~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/between_final_counts.csv
+
+#filter for non-M starts - containing only M starts for mb and ml
+~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv
+
+#starting coding
+cd ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/all
+python
+import numpy as np
+import pandas as pd
+
+#import lsln for myobra, with genes numbers as index
+within_lsln = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output/grepped_lines/myobra_lsln.csv", header='infer', index_col='gene')
+
+#import lnls for between spp
+between_lsln = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/grepped_lines/between_lsln.csv", header='infer', index_col=0)
+
+#import pnps, index is the gene names (not numbers)
+pnps = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/snpeff/myobra/chrom_vcfs/ann_vcfs/info_csvs/final_counts/genome_myobra_MK_within.csv", header='infer', index_col=0)
+
+
+#import dnds, gene numbers as index
+dnds = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/between_final_counts.csv", header='infer', index_col='gene') 
+
+#read in gene_filter, with gene numbers as index
+gene_filter = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv", header='infer', index_col='gene')
+
+#read in gene lookup table
+lookup = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes", delimiter=' ', header=None, index_col = 0)
+
+###rename the columns
+#within_lsln - 6777
+within_lsln = within_lsln.rename(columns={'S': 'LSP', 'N': 'LNP'})
+
+#between_lsln - 6777
+between_lsln= between_lsln.rename(columns={'S': 'LSD', 'N': 'LND'})
+
+#pnps - 18,252
+pnps = pnps.rename(columns={'Total': 'Total', 'Non-syn': 'PN', 'Syn': 'PS', 'Syn_check': 'Syn_check'})
+
+#dnds - 6777
+dnds = dnds.rename(columns={'dN': 'DN', 'dS': 'DS'})
+
+#lookup
+lookup.columns = ['name']
+
+#lookup - 6341
+#gene_filter - 5857
+
+#start merging the dataframes
+#merging the two filters brings the total number of genes down to 5495
+total_filter = pd.merge(lookup, gene_filter, left_index=True, right_index=True)
+df1 = pd.merge(total_filter, within_lsln, left_index=True, right_index=True)
+df2 = pd.merge(df1, between_lsln, left_index=True, right_index=True)
+df3 = pd.merge(df2, dnds, left_index=True, right_index=True)
+
+#adding in the pnps, filters down to 5268 genes
+df4 = pnps.merge(df3, left_index=True, right_on='name')
+
+#drop unneeded columns
+df4.drop(['Total', 'Syn_check', 'mb', 'ml', 'name'], axis=1, inplace=True)
+
+#add in column for the number of alleles
+df4['alleles']=4
+
+df4 = df4[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles"]]
+
+df4.to_csv("myobra_all_MKformat.csv")
+
+########
+#myobra nofs
+
+cd ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS
+
+
+python
+import numpy as np
+import pandas as pd
+
+#import lsln for myobra, with genes numbers as index
+within_lsln = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/output/grepped_lines/myobra_lsln.csv", header='infer', index_col='gene')
+
+#import lnls for between spp
+between_lsln = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/grepped_lines/between_lsln.csv", header='infer', index_col=0)
+
+#import pnps, index is the gene names (not numbers)
+pnps = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/snpeff/myobra/chrom_vcfs/ann_vcfs/info_csvs/no_frameshift/final_counts/genome_myobra_noFS_MK_within.csv", header='infer', index_col=0)
+
+
+#import dnds, gene numbers as index
+dnds = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/between_final_counts.csv", header='infer', index_col='gene') 
+
+#read in gene_filter, with gene numbers as index
+gene_filter = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv", header='infer', index_col='gene')
+
+#read in gene lookup table
+lookup = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes", delimiter=' ', header=None, index_col = 0)
+
+###rename the columns
+#within_lsln - 6777
+within_lsln = within_lsln.rename(columns={'S': 'LSP', 'N': 'LNP'})
+
+#between_lsln - 6777
+between_lsln= between_lsln.rename(columns={'S': 'LSD', 'N': 'LND'})
+
+#pnps - 18,237
+pnps = pnps.rename(columns={'Total': 'Total', 'Non-syn': 'PN', 'Syn': 'PS', 'Syn_check': 'Syn_check'})
+
+#dnds - 6777
+dnds = dnds.rename(columns={'dN': 'DN', 'dS': 'DS'})
+
+#lookup
+lookup.columns = ['name']
+
+#lookup - 6341
+#gene_filter - 5857
+
+#start merging the dataframes
+#merging the two filters brings the total number of genes down to 5495
+total_filter = pd.merge(lookup, gene_filter, left_index=True, right_index=True)
+df1 = pd.merge(total_filter, within_lsln, left_index=True, right_index=True)
+df2 = pd.merge(df1, between_lsln, left_index=True, right_index=True)
+df3 = pd.merge(df2, dnds, left_index=True, right_index=True)
+
+#adding in the pnps, filters down to 5268 genes
+df4 = pnps.merge(df3, left_index=True, right_on='name')
+
+#drop unneeded columns
+df4.drop(['Total', 'Syn_check', 'mb', 'ml', 'name'], axis=1, inplace=True)
+
+#add in column for the number of alleles
+df4['alleles']=4
+
+df4 = df4[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles"]]
+
+df4.to_csv("myobra_noFS_MKformat.csv")
+
+########
+#myoluc all
+
+cd ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/all
+
+
+python
+import numpy as np
+import pandas as pd
+
+#import lsln for myoluc, with genes numbers as index
+within_lsln = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/output/grepped_lines/myoluc_lsln.csv", header='infer', index_col='gene')
+
+#import lnls for between spp
+between_lsln = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/grepped_lines/between_lsln.csv", header='infer', index_col=0)
+
+#import pnps, index is the gene names (not numbers)
+pnps = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/snpeff/myoluc/chrom_vcfs/ann_vcfs/info_csvs/final_counts/genome_myoluc_MK_within.csv", header='infer', index_col=0)
+
+#import dnds, gene numbers as index
+dnds = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/between_final_counts.csv", header='infer', index_col='gene') 
+
+#read in gene_filter, with gene numbers as index
+gene_filter = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv", header='infer', index_col='gene')
+
+#read in gene lookup table
+lookup = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes", delimiter=' ', header=None, index_col = 0)
+
+###rename the columns
+#within_lsln - 6777
+within_lsln = within_lsln.rename(columns={'S': 'LSP', 'N': 'LNP'})
+
+#between_lsln - 6777
+between_lsln= between_lsln.rename(columns={'S': 'LSD', 'N': 'LND'})
+
+#pnps - 18,946
+pnps = pnps.rename(columns={'Total': 'Total', 'Non-syn': 'PN', 'Syn': 'PS', 'Syn_check': 'Syn_check'})
+
+#dnds - 6777
+dnds = dnds.rename(columns={'dN': 'DN', 'dS': 'DS'})
+
+#lookup
+lookup.columns = ['name']
+
+#lookup - 6341
+#gene_filter - 5857
+
+#start merging the dataframes
+#merging the two filters brings the total number of genes down to 5495
+total_filter = pd.merge(lookup, gene_filter, left_index=True, right_index=True)
+df1 = pd.merge(total_filter, within_lsln, left_index=True, right_index=True)
+df2 = pd.merge(df1, between_lsln, left_index=True, right_index=True)
+df3 = pd.merge(df2, dnds, left_index=True, right_index=True)
+
+#adding in the pnps, filters down to 5462 genes
+df4 = pnps.merge(df3, left_index=True, right_on='name')
+
+#drop unneeded columns
+df4.drop(['Total', 'Syn_check', 'mb', 'ml', 'name'], axis=1, inplace=True)
+
+#add in column for the number of alleles
+df4['alleles']=6
+
+df4 = df4[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles"]]
+
+df4.to_csv("myoluc_all_MKformat.csv")
+
+
+########
+#myoluc nofs
+
+cd ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS
+
+python
+import numpy as np
+import pandas as pd
+
+#import lsln for myoluc, with genes numbers as index
+within_lsln = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myoluc/output/grepped_lines/myoluc_lsln.csv", header='infer', index_col='gene')
+
+#import lnls for between spp
+between_lsln = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/output/grepped_lines/between_lsln.csv", header='infer', index_col=0)
+
+#import pnps, index is the gene names (not numbers)
+pnps = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/snpeff/myoluc/chrom_vcfs/ann_vcfs/info_csvs/no_frameshift/final_counts/genome_myoluc_noFS_MK_within.csv", header='infer', index_col=0)
+
+#import dnds, gene numbers as index
+dnds = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_MSA/between_final_counts.csv", header='infer', index_col='gene') 
+
+#read in gene_filter, with gene numbers as index
+gene_filter = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv", header='infer', index_col='gene')
+
+#read in gene lookup table
+lookup = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes", delimiter=' ', header=None, index_col = 0)
+
+###rename the columns
+#within_lsln - 6777
+within_lsln = within_lsln.rename(columns={'S': 'LSP', 'N': 'LNP'})
+
+#between_lsln - 6777
+between_lsln= between_lsln.rename(columns={'S': 'LSD', 'N': 'LND'})
+
+#pnps - 18,940
+pnps = pnps.rename(columns={'Total': 'Total', 'Non-syn': 'PN', 'Syn': 'PS', 'Syn_check': 'Syn_check'})
+
+#dnds - 6777
+dnds = dnds.rename(columns={'dN': 'DN', 'dS': 'DS'})
+
+#lookup
+lookup.columns = ['name']
+
+#lookup - 6341
+#gene_filter - 5857
+
+#start merging the dataframes
+#merging the two filters brings the total number of genes down to 5495
+total_filter = pd.merge(lookup, gene_filter, left_index=True, right_index=True)
+df1 = pd.merge(total_filter, within_lsln, left_index=True, right_index=True)
+df2 = pd.merge(df1, between_lsln, left_index=True, right_index=True)
+df3 = pd.merge(df2, dnds, left_index=True, right_index=True)
+
+#adding in the pnps, filters down to 5460 genes
+df4 = pnps.merge(df3, left_index=True, right_on='name')
+
+#drop unneeded columns
+df4.drop(['Total', 'Syn_check', 'mb', 'ml', 'name'], axis=1, inplace=True)
+
+#add in column for the number of alleles
+df4['alleles']=6
+
+df4 = df4[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles"]]
+
+df4.to_csv("myoluc_noFS_MKformat.csv")
+
+
+###if need to get all the rows out individually, use this code
+for row in df4.reset_index().values:
+    #print row
+    row[1:].tofile(str(row[0])+'.csv', sep=',', format="%s")
+
+#########
+
+#take out the mk columns for the old R testing to show steve
+bigdf = pd.read_csv("myobra_all_MKformat.csv", header='infer', index_col=0, delimiter=',')
+mkdf = bigdf[["DN", "DS", "PN", "PS"]]
+
+mkdf.to_csv("mkdf.csv", header=False, sep=',')
+
+
+#myobra_noFS 
+#take out the mk columns for the old R testing to show steve
+bigdf = pd.read_csv("myobra_noFS_MKformat.csv", header='infer', index_col=0, delimiter=',')
+mkdf = bigdf[["DN", "DS", "PN", "PS"]]
+
+mkdf.to_csv("mkdf.csv", header=False, sep=',')
+
+#myoluc_noFS
+#take out the mk columns for the old R testing to show steve
+bigdf = pd.read_csv("myoluc_noFS_MKformat.csv", header='infer', index_col=0, delimiter=',')
+mkdf = bigdf[["DN", "DS", "PN", "PS"]]
+
+mkdf.to_csv("mkdf.csv", header=False, sep=',')
+
+
+#RUNNING MKSOFTWARE
+#06.09.2022: trying the mcdonald-krietman testing that use more parameters
+#want to combine the mk dataframe to the big paml dataframe - would give categories to the MK data 
+
+#move into the directory with the MK welch parameters dataframe
+cd ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS
+
+#big df is located here
+#../../../Results/PAML/Aug22_bg_total.csv
+
+#start python
+python
+import pandas as pd
+mk = pd.read_csv("myobra_noFS_MKformat.csv", header='infer', index_col=0)
+
+#read in the big PAML datafram
+df = pd.read_csv("../../../Results/PAML/Aug22_bg_total.csv", header='infer', index_col=0)
+
+#merge
+big = pd.merge(df, mk, left_index=True, right_index=True)
+
+big.to_csv("Sep6_MK_PAML.csv", index=True, header=True)
+
+
+#wasnt to remove the square brackets that live from some of the MK tests
+sed -i 's/[][]//g' Sep6_MK_PAML.csv
+
+##################################
+#adding in a DoS calculation
+#Dos = dN/(dN + dS) - pN/(pN + pS)
+#Neutrality calculation used before was results$NI = (results$pN/results$pS)/(results$dN/results$dS) (in MK_fishers_exact_neutrality.R)
+python 
+import pandas as pd
+
+#read in the big dataframe
+df = pd.read_csv("Sep6_MK_PAML.csv", header='infer', index_col=0)
+#5268
+
+#create new DoS column
+df["DoS"] = (df["DN"] / (df["DN"] + df["DS"])) - (df["PN"] / (df["PN"] + df["PS"]))
+
+#DoS < 0 is purifying, DoS > 0 is positive
+df.loc[df["DoS"] > 0]
+#2923 positive
+df.loc[df["DoS"] < 0]
+#2005 purifying
+#340 = 0
+
+#not sure if there is a significance test for these 
+
+#finding the mean of the DoS column
+df["DoS"].mean()
+#0.07938359106715931
+
+#save out the file
+df.to_csv("Sep6_MK_PAML.csv", index=True, header=True)
+
+##############################################################
+#trying out the MKtest software
+#need to create dataframes with just the MK Welch parameters, and the columns to add in either immune/non-immune as an integer
+#correct directory if not here already
+cd ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS
+
+#start python
+python
+import pandas as pd
+
+#read in the big dataframe with all the necessary info on
+df = pd.read_csv("Sep6_MK_PAML.csv", index_col=0, header='infer')
+
+#want to add in column for if the genes are sig for myobra only
+#read in sig
+sig = pd.read_csv("../../../PAML_pub59/selection_tests/comparison/myobra_uniq_genes", index_col=0, header=None)
+#non_myobra uniq genes
+nonsig = pd.read_csv("../../../PAML_pub59/selection_tests/comparison/non_myobra_uniq_genes", index_col=0, header=None)
+
+#merge with sig to get sig df
+sig_df = pd.merge(df, sig, left_index=True, right_index=True)
+sig_df["myobra_sig"] = "yes"
+
+#merge with non sig to get nonsig df - changing bc non sig is symbols not names
+nsig_df = pd.merge(df, nonsig, left_on="symbol", right_index=True)
+nsig_df["myobra_sig"] = "no"
+
+#concat this df together with the new 
+df2 = pd.concat([sig_df, nsig_df])
+
+#categorise new col as either immune or non immune as 1 or 2 
+def categorise(row):
+	if row['category'] == "immune":
+		return '1'
+	elif row['category'] == "non_immune":  
+		return '2'
+		
+#run the categorisation on the dataframe
+df2["category_bin"] = df2.apply(lambda row: categorise(row), axis=1)
+
+#save out this to the same file
+df2.to_csv("Sep6_MK_PAML.csv", index=True, header=True)
+
+#add in a placeholder category for the MKtest software
+df2["col"] = '1'
+
+#cols need to be in this order: DN LN(D) PN LN(P) DS LS(D) PS LS(P) alleles Chr Class r
+welch = df2[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "category_bin"]]
+#save out this mktest
+welch.to_csv("totalBG_welchMK.csv", header=False, index=False)
+
+#subset big df so only have the myobra_uniq genes
+mb_df = df2.loc[df2["myobra_sig"] == "yes"]
+
+mb_welch = mb_df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "category_bin"]]
+
+#save out this df
+mb_welch.to_csv("MBuniq_welchMK.csv", header=False, index=False)
+
+#make directory for output files
+mkdir welchMK_outputs
+
+mkdir welch
+#run MK test on both 
+#cd into the MK test folder
+cd ~/MKtest-2.0
+
+#start screens for both
+./Mktest -a 1 -p 1 -o my.outputfile example_data.csv
+# -a 1 = alpha is estimated from the data, taking a single value for all loci (all genes) and classes
+# -p 2 = neutral diversity is estimated from the data, taking a single value at autosomal loci
+
+#run for all bg - this gives (p1) one alpha value across the whole, pays no attention to class (immune or non)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/welchMK_outputs/totalBG_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/totalBG_welchMK.csv
+#run for all MK_Sig - this gives (p1) one alpha value across the whole, pays no attention to class (immune or non)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/welchMK_outputs/MBuniq_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/MBuniq_welchMK.csv
+
+#run for all bg - this gives (p4) one alpha value for each class
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/welchMK_outputs/totalBG_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/totalBG_welchMK.csv
+#run for myobra sig - this gives (p4) one alpha value for each class
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/welchMK_outputs/MBuniq_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/MBuniq_welchMK.csv
+
+
+##########
+#want to look at just the immune set, and see if there is a difference between the selection in the bg set and the bs_sig myobra
+#start python
+python
+import pandas as pd
+
+#read in the big dataframe with all the necessary info on
+df = pd.read_csv("Sep6_MK_PAML.csv", index_col=0, header='infer')
+
+
+#need to add a binary in to say whether the the genes are in the sig gene list or not
+#categorise new col as either immune or non immune as 1 or 2 
+def categorise(row):
+	if row['myobra_sig'] == "yes":
+		return '1'
+	elif row['myobra_sig'] == "no":  
+		return '2'
+		
+#run the categorisation on the dataframe
+df["myobra_sig_bin"] = df.apply(lambda row: categorise(row), axis=1)
+
+#add in a placeholder category for the MKtest software
+df["col"] = '1'
+
+#select the immune genes only
+imm_df = df.loc[df["category"] == "immune"]
+
+#gather the columns for the dataframe
+imm_welch = imm_df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "myobra_sig_bin"]]
+
+#write out the csv
+imm_welch.to_csv("imm_welchMK.csv", header=False, index=False)
+
+###go back to mk test
+#run for immune df - this gives (a1) one alpha value across the whole, pays no attention to class (myobra sig or not)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/welchMK_outputs/imm_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/imm_welchMK.csv
+
+#run for all bg - this gives (a4) one alpha value for each class (myobra sig or not)
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/welchMK_outputs/imm_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/imm_welchMK.csv
+
+
+#############
+#see what happens when i estimate the adaptive substitutions per site
+./MKtest -a 5 -A -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/welchMK_outputs/totalBG_welchMK_subest.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/totalBG_welchMK.csv
+
+#i think we can assume maybe that the genes are in the same order? let me look at this
+python
+import pandas as pd
+
+#load in the output file
+df = pd.read_csv("totalBG_welchMK_subest.out", header='infer', delimiter='\t')
+#transpose so the rows become columns
+df2 = df.transpose()
+#select only the columns with 
+df3 = df2.iloc[4:5272,]
+#rename the column to add on
+df4 = df3.rename(columns={0:'adapt_subs_welch'})
+#get rid of the index
+df5 = df4.reset_index()
+
+#read in the bigger dataframe to add this in
+big = pd.read_csv("../Sep6_MK_PAML.csv", header = "infer")
+#concat the df together, to add the columns onto the end
+df6 = pd.concat([big, df5], axis=1, join='inner')
+#write out this 
+df6.to_csv("../Sep6_MK_PAML.csv", index=False, header=True)
+
+##### pulling out some test rows to see if the adaptive subs numbers are roughly the same the order I think they should be in
+cd ..
+mkdir tests
+
+#start python to get out these things
+python
+import pandas as pd
+
+#read in the big dataframe with all the necessary info on
+df = pd.read_csv("Sep6_MK_PAML.csv", index_col=0, header='infer')
+
+#get out the cols needed
+welch = df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles"]]
+
+###
+#go back to the MK folder
+cd ~/MKtest-2.0
+
+./MKtest -a 5 -A -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036302460.1.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036302460.1.csv # 0.0160435525681  #grepped value 0.0253619936401
+./MKtest -a 5 -A -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036314229.1.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036314229.1 # 0.00196138513918 #grepped value -0.00199111764029
+./MKtest -a 5 -A -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036334833.1.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036334833.1 #-0.0013491825336  #grepped value -0.00356951116071
+./MKtest -a 5 -A -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036350308.1.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036350308.1 #-0.00134918243828  #grepped value -0.00644744562603
+
+./MKtest -a 5 -A -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036302460.2.out2 ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036302460.1.csv #0.0160435534393
+./MKtest -a 5 -A -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036314229.1.out2 ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036314229.1 #0.0019613851048
+./MKtest -a 5 -A -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036334833.1.out2 ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myobra/noFS/tests/myoMyo_rna-XM_036334833.1 #-0.00134918261814
+
+
+#IMMUNE PATHWAYS AND DOS
+#myoluc MK testing
+
+#the Welch parameters for myoluc are found in this directory - myoluc_noFS_MKformat.csv
+cd Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/
+
+¢take the brackets out of the mk df
+sed -i 's/[][]//g' myoluc_noFS_MKformat.csv
+
+#create a big dataframe, using the big Sep6 df as a base for most of the information
+#want to remove all of the columns that are specifically for myobra (keep only symbol,tree_omega,tree_kappa,codon_length,nuc_length,category,category_bin)
+python
+import pandas as pd
+big_df = pd.read_csv("../../myobra/noFS/Sep6_MK_PAML.csv", index_col=0, header='infer')
+#keep only the columns that are not related to mb significance
+big2 = big_df[["symbol","tree_omega","tree_kappa","codon_length","nuc_length","category","category_bin"]]
+
+#read in the ml_mk df
+ml = pd.read_csv("myoluc_noFS_MKformat.csv", header='infer', index_col=0)
+
+#merge together
+df = pd.merge(big2, ml, left_index=True, right_index=True)
+#5249 rows left
+
+#adding in a DoS calculation
+#Dos = dN/(dN + dS) - pN/(pN + pS)
+#Neutrality calculation used before was results$NI = (results$pN/results$pS)/(results$dN/results$dS) (in MK_fishers_exact_neutrality.R)
+
+#create new DoS column
+df["DoS"] = (df["DN"] / (df["DN"] + df["DS"])) - (df["PN"] / (df["PN"] + df["PS"]))
+
+#DoS < 0 is purifying, DoS > 0 is positive
+df.loc[df["DoS"] > 0]
+#3041 positive
+df.loc[df["DoS"] < 0]
+#1994 purifying
+df.loc[df["DoS"] == 0]
+#214 = 0
+
+#finding the mean of the DoS column
+df["DoS"].mean()
+0.08932091711649165
+
+#save out these results to look at later
+df.to_csv("26Sep_mlMK.csv", header=True, index=True)
+
+#creating dataframe to MK test between immune and non-immune 
+#add in a placeholder category for the MKtest software
+df["col"] = '1'
+
+#cols need to be in this order: DN LN(D) PN LN(P) DS LS(D) PS LS(P) alleles Chr Class r
+welch = df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "category_bin"]]
+#save out this mktest
+welch.to_csv("immune_welchMK.csv", header=False, index=False)
+
+###
+#creating the pathways dataframes
+
+#read in list for IL17 in and il17 out
+#read in il17in
+il17_in = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/IL17_pathway.grep", index_col=0, header=None)
+#il17out
+il17_out = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/IL17_pathway.exset", index_col=0, header=None)
+
+#merge with il17in to get il17in df
+il17_in_df = pd.merge(df, il17_in, left_on="symbol", right_index=True)
+il17_in_df["pathway"] = "1"
+
+#merge with il17in to get il17in df
+il17_out_df = pd.merge(df, il17_out, left_on="symbol", right_index=True)
+il17_out_df["pathway"] = "2"
+
+#concat this df together with the new 
+il17_df = pd.concat([il17_in_df, il17_out_df])
+
+
+#cols need to be in this order: DN LN(D) PN LN(P) DS LS(D) PS LS(P) alleles Chr Class r
+il17_welch = il17_df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "pathway"]]
+#save out this mktest
+il17_welch.to_csv("IL17_welchMK.csv", header=False, index=False)
+
+
+
+#read in list for inflammasome_pathway in and inflammasome_pathway out
+#read in inflammasome_pathway
+inflammasome_in = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/inflammasome_pathway.grep", index_col=0, header=None)
+#inflammasome out
+inflammasome_out = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/inflammasome_pathway.exset", index_col=0, header=None)
+
+#merge with inflammasome in to get inflammasome in df
+inflammasome_in_df = pd.merge(df, inflammasome_in, left_on="symbol", right_index=True)
+inflammasome_in_df["pathway"] = "1"
+
+#merge with inflammasome out to get inflammasome out df
+inflammasome_out_df = pd.merge(df, inflammasome_out, left_on="symbol", right_index=True)
+inflammasome_out_df["pathway"] = "2"
+
+#concat this df together with the new 
+inflammasome_df = pd.concat([inflammasome_in_df, inflammasome_out_df])
+
+
+#cols need to be in this order: DN LN(D) PN LN(P) DS LS(D) PS LS(P) alleles Chr Class r
+inflammasome_welch = inflammasome_df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "pathway"]]
+#save out this mktest
+inflammasome_welch.to_csv("inflammasome_welchMK.csv", header=False, index=False)
+
+
+
+#read in list for Treg in and Treg out
+#read in Treg
+Treg_in = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/Treg_pathway.grep", index_col=0, header=None)
+#Treg out
+Treg_out = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/Treg_pathway.exset", index_col=0, header=None)
+
+#merge with Treg in to get Treg in df
+Treg_in_df = pd.merge(df, Treg_in, left_on="symbol", right_index=True)
+Treg_in_df["pathway"] = "1"
+
+#merge with Treg out to get Treg out df
+Treg_out_df = pd.merge(df, Treg_out, left_on="symbol", right_index=True)
+Treg_out_df["pathway"] = "2"
+
+#concat this df together with the new 
+Treg_df = pd.concat([Treg_in_df, Treg_out_df])
+
+#cols need to be in this order: DN LN(D) PN LN(P) DS LS(D) PS LS(P) alleles Chr Class r
+Treg_welch = Treg_df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "pathway"]]
+#save out this mktest
+Treg_welch.to_csv("Treg_welchMK.csv", header=False, index=False)
+
+
+
+#read in list for IL6 in and IL6 out
+#read in IL6
+IL6_in = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/IL6_pathway.grep", index_col=0, header=None)
+#IL6 out
+IL6_out = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/IL6_pathway.exset", index_col=0, header=None)
+
+#merge with IL6 in to get IL6 in df
+IL6_in_df = pd.merge(df, IL6_in, left_on="symbol", right_index=True)
+IL6_in_df["pathway"] = "1"
+
+#merge with IL6 out to get IL6 out df
+IL6_out_df = pd.merge(df, IL6_out, left_on="symbol", right_index=True)
+IL6_out_df["pathway"] = "2"
+
+#concat this df together with the new 
+IL6_df = pd.concat([IL6_in_df, IL6_out_df])
+
+#cols need to be in this order: DN LN(D) PN LN(P) DS LS(D) PS LS(P) alleles Chr Class r
+IL6_welch = IL6_df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "pathway"]]
+#save out this mktest
+IL6_welch.to_csv("IL6_welchMK.csv", header=False, index=False)
+
+
+
+#read in list for Th17_differentiation in and Th17_differentiation out
+#read in Th17_differentiation
+Th17_in = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/Th17_differentiation.grep", index_col=0, header=None)
+#Th17 out
+Th17_out = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/immune_pathways/Th17_differentiation.exset", index_col=0, header=None)
+
+#merge with Th17 in to get Th17 in df
+Th17_in_df = pd.merge(df, Th17_in, left_on="symbol", right_index=True)
+Th17_in_df["pathway"] = "1"
+
+#merge with Th17 out to get Th17 out df
+Th17_out_df = pd.merge(df, Th17_out, left_on="symbol", right_index=True)
+Th17_out_df["pathway"] = "2"
+
+#concat this df together with the new 
+Th17_df = pd.concat([Th17_in_df, Th17_out_df])
+
+#cols need to be in this order: DN LN(D) PN LN(P) DS LS(D) PS LS(P) alleles Chr Class r
+Th17_welch = Th17_df[["DN", "LND", "PN", "LNP", "DS", "LSD", "PS", "LSP", "alleles", "col", "pathway"]]
+#save out this mktest
+Th17_welch.to_csv("Th17diff_welchMK.csv", header=False, index=False)
+
+
+#####now run the mk tests
+#make a directory
+mkdir welchMK_outputs
+
+#need to run the MK test in the right directory
+cd ~/MKtest-2.0
+
+
+###go back to mk test
+#run for  df - this gives (a1) one alpha value across the whole, pays no attention to class (pathway or not)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/immune_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/immune_welchMK.csv
+#run for df - this gives (a4) one alpha value for each class (pathway or not)
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/immune_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/immune_welchMK.csv
+
+
+#run for  df - this gives (a1) one alpha value across the whole, pays no attention to class (pathway or not)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/IL17_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/IL17_welchMK.csv
+#run for df - this gives (a4) one alpha value for each class (pathway or not)
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/IL17_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/IL17_welchMK.csv
+
+
+#run for  df - this gives (a1) one alpha value across the whole, pays no attention to class (pathway or not)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/IL6_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/IL6_welchMK.csv
+#run for df - this gives (a4) one alpha value for each class (pathway or not)
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/IL6_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/IL6_welchMK.csv
+
+
+#run for  df - this gives (a1) one alpha value across the whole, pays no attention to class (pathway or not)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/inflammasome_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/inflammasome_welchMK.csv
+#run for df - this gives (a4) one alpha value for each class (pathway or not)
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/inflammasome_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/inflammasome_welchMK.csv
+
+
+#run for  df - this gives (a1) one alpha value across the whole, pays no attention to class (pathway or not)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/Th17diff_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/Th17diff_welchMK.csv
+#run for df - this gives (a4) one alpha value for each class (pathway or not)
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/Th17diff_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/Th17diff_welchMK.csv
+
+
+#run for  df - this gives (a1) one alpha value across the whole, pays no attention to class (pathway or not)
+./MKtest -a 1 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/Treg_welchMK_1a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/Treg_welchMK.csv
+#run for df - this gives (a4) one alpha value for each class (pathway or not)
+./MKtest -a 4 -p 1 -o ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/welchMK_outputs/Treg_welchMK_2a.out ~/Datafiles/Bats/GCF_rerun_0821/MK_tests/myoluc/noFS/Treg_welchMK.csv
+
+
+
+##############
+#patterns are extremely similar to the results from myobra
+#looking to see how many have 0 for the synonymous 
+#read into python the big csv
+df = pd.read_csv("26Sep_mlMK.csv", index_col=0, header='infer')
+
+#number of divergent synonymous sites that are 0
+df.loc[df["DS"] == 0]
+#only 9 have 0 sites!
+
+#number of polymorphic synonymous sites that are 0
+df.loc[df["PS"] == 0]
+#only 46
+
+#number of divergent nonsynonymous sites that are 0
+df.loc[df["DN"] == 0]
+#587
+
+#want to see how much the immune gene set overlaps with the immune gene list #only 92, so unsure it will be that
+df.loc[(df["DN"] == 0) & (df["category_bin"] == 1)]
+
+#looking to see how many PN = 0
+df.loc[df["PN"] == 0] #358 genes
+#number in immune genes
+df.loc[(df["PN"] == 0) & (df["category_bin"] == 1)] #85 of these
+
+
+#PAML OUTPUT WRANGLING
+##########################BRANCH
+
+###grepping out for significance only
+#make directories from the grepped lines
+cd ~/Datafiles/Bats/GCF_rerun_0821/PAML_branch/selection_tests/myobra_forward
+mkdir grep_lnL
+
+#cd into the branch_site_neutral
+cd branch_site_neutral
+#get out the lnl for the neutral, removing the spaces and replacing with commas
+for i in *neutral.txt; do
+grep 'lnL' ${i} > ../grep_lnL/${i}.null.lnL;
+sed -i -e 's/\s\+/,/g' ../grep_lnL/${i}.null.lnL; #change the spaces to commas
+done
+
+#cd into the branch_site
+cd ../branch_site
+#get out the lnl for the alt, removing the spaces and replacing with commas
+for i in *site.txt; do
+grep 'lnL' ${i} > ../grep_lnL/${i}.alt.lnL;
+sed -i -e 's/\s\+/,/g' ../grep_lnL/${i}.alt.lnL; #change the spaces to commas
+done
+
+#first make sure there are no empty files, as the python script will break if there are.
+#find empty files in the grep_table and grep_lnL directories
+cd ../grep_lnL
+find -type f -empty
+
+#getting rid of ./myoMyo_rna-XM_036327705_branch_site.txt.alt.lnL ./myoMyo_rna-XM_036327705_branch_site_neutral.txt.null.lnL ./myoMyo_rna-XM_036311857_branch_site_neutral.txt.null.lnL ./myoMyo_rna-XM_036311857_branch_site.txt.alt.lnL
+
+#get a file with all the names, so I can call all of them with different names
+ls *null.lnL > ../file_names
+sed -i -e 's/_branch_site_neutral.txt.null.lnL//g' ../file_names
+
+
+
+
+#move back into the base file for the spp
+cd ..
+#create file for dictionary start file to go
+touch proto_dict
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["grep_lnL/'${i}'_branch_site_neutral.txt.null.lnL", "grep_lnL/'${i}'_branch_site.txt.alt.lnL"]' >> proto_dict;
+done
+
+#create base file to append onto
+cat > base.csv
+gene,lnLnull,lnLalt
+
+#go into python
+python
+#set package
+import pandas as pd
+
+#read in file with chrom names in 
+names = pd.read_csv("file_names", header=None)
+#read in the created proto_dict file
+proto = pd.read_csv("proto_dict", header=None, sep='\t')
+#join together
+df = pd.concat([names, proto], axis=1)
+#name the columns
+df.columns = ["name", "list"]
+#change so values will be treated separately (allows the creation of the dictionary)
+df['list'] = df['list'].apply(eval)
+#create dictionary
+dictionary = dict(zip(df.name, df.list))
+
+
+base = pd.read_csv("base.csv", delimiter=',', header='infer')
+
+for key,value in dictionary.items():
+	null_file = value[0]
+	lnL_null = pd.read_csv(null_file, delimiter=',', header=None)
+	alt_file = value[1]
+	lnL_alt = pd.read_csv(alt_file, delimiter=',', header=None)
+	base = base.append({'gene':key, 'lnLnull':lnL_null.iat[0,4],'lnLalt':lnL_alt.iat[0,4]},ignore_index=True)
+
+base["LRT"] = (2*(base["lnLalt"] - base["lnLnull"]))
+
+base.to_csv("total_PAML_branch_LRT.csv", header=True, index=False)
+
+#subsetting (without correction just for numbers) #THIS IS NOT THE RIGHT VALUE, IS 3.81
+sig = base.loc[base["LRT"] >= 3.81] 
+sig2 = base.loc[base["LRT"] <= -3.81]
+sig3 = pd.concat([sig, sig2], axis=0)
+
+
+lookup = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes", delimiter=' ', header=None, index_col = 0)
+
+sig3['gene'] = sig3['gene'].astype(str) + '.1'
+
+df = lookup.merge(sig3, left_index=True, right_on='gene') #763
+df.to_csv("sig_PAML_branch_LRT.csv", header=True, index=False)
+names = df.iloc[:,0]
+names.to_csv("sig_names", header=False, index=False)
+
+comm -12 <(sort sig_names) <(sort ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/comparison/myobra_uniq_gene_symbols) | wc -l
+cd ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/comparison/myobra_uniq_gene_symbols
+
+
+
+
+
+####################
+#getting out the branch values out for this
+grep 'kappa (ts/tv) ='
+grep 'w (dN/dS) for branches:'
+
+####
+#grep out the omega estimates and kappa values for the whole tree
+
+#cd to the correct file
+cd ~/Datafiles/Bats/GCF_rerun_0821/PAML_omega_estimate/selection_tests/myobra_forward
+
+#create directory for files to go into
+mkdir grep_omega
+mkdir grep_kappa
+
+#move into the branch_site directory
+cd branch_site
+
+#start the grep loop to get out the details
+for i in *.txt; do
+grep 'kappa (ts/tv) =' ${i} > ${i}.kappa1; #grep out kappa line
+sed -i -e 's/ //g' ${i}.kappa1; #sed line removes the spaces in a temp file
+cat ${i}.kappa1 | cut -d= -f2 > ../grep_kappa/${i}.kappa; #cut line divides the phrase by the space delimiter, and choses the second half of the phrase, and saves to final file
+rm ${i}.kappa1; #then removes the temp file
+grep 'w (dN/dS) for branches:' ${i} > ${i}.omega1; # grep out omega line
+cat ${i}.omega1 | cut -d: -f2 > ${i}.omega2; #cut line divides the phrase by the space delimiter, and choses the second half of the phrase, and saves to second temp file
+sed -e 's/\s\+/,/g' ${i}.omega2 > ../grep_omega/${i}.omega # convert blank spaces to commas
+rm ${i}.omega1 ${i}.omega2; # remove both temporary files
+done
+
+#first make sure there are no empty files, as the python script will break if there are.
+#find empty files in the grep_table and grep_lnL directories
+cd ../grep_omega
+find -type f -empty
+
+#getting rid of ./myoMyo_rna-XM_036327705_ ./myoMyo_rna-XM_036327705 ./myoMyo_rna-XM_036311857
+
+#create new base csv
+cat > base2.csv
+gene,branch_tree_omega,branch_mb_omega,branch_kappa
+
+#create file for dictionary start file to go
+touch proto_dict2
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["grep_omega/'${i}'_branch_site.txt.omega", "grep_kappa/'${i}'_branch_site.txt.kappa"]' >> proto_dict2;
+done
+
+#go into python
+python
+#set package
+import pandas as pd
+
+#read in file with chrom names in 
+names = pd.read_csv("file_names", header=None)
+#read in the created proto_dict file
+proto = pd.read_csv("proto_dict2", header=None, sep='\t')
+#join together
+df = pd.concat([names, proto], axis=1)
+#name the columns
+df.columns = ["name", "list"]
+#change so values will be treated separately (allows the creation of the dictionary)
+df['list'] = df['list'].apply(eval)
+#create dictionary
+dictionary = dict(zip(df.name, df.list))
+
+
+base = pd.read_csv("base2.csv", delimiter=',', header='infer')
+
+for key,value in dictionary.items():
+	omega_file = value[0]
+	omega = pd.read_csv(omega_file, delimiter=',', header=None)
+	kappa_file = value[1]
+	kappa = pd.read_csv(kappa_file, delimiter=',', header=None)
+	base = base.append({'gene':key, 'branch_tree_omega':omega.iat[0,1],'branch_mb_omega':omega.iat[0,2], 'branch_kappa':kappa.iat[0,0]},ignore_index=True)
+
+df2 = pd.read_csv("total_PAML_branch_LRT.csv", header='infer', index_col=0)
+
+total = pd.merge(base, df2, left_on='gene', right_index=True)
+
+total = total.rename(columns={'lnLnull':'branch_lnLnull', 'lnLalt':'branch_lnLalt', 'LRT':'branch_LRT'})
+
+#first need to modify the gene names so they match properly everything else (adding .1 onto the ends)
+total['gene'] = total['gene'].astype(str) + ".1"
+
+#write-over the branch file
+total.to_csv("total_PAML_branch_LRT.csv", header=True, index=False)
+
+
+
+
+
+
+
+
+########################################################################################BRANCH_SITE
+#grep the PAML  - testing small set
+
+#data in PAML output looks like this (branch-site)
+site class             0        1       2a       2b
+proportion       0.60140  0.24258  0.11118  0.04484
+background w     0.08067  1.00000  0.08067  1.00000
+foreground w     0.08067  1.00000 581.32600 581.32600
+
+#copying the output files
+cp ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/branch_site/myoMyo_rna-XM_036295537_branch_site.txt .
+cp ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/branch_site_neutral/myoMyo_rna-XM_036295537_branch_site_neutral.txt .
+
+cp ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/branch_site/myoMyo_rna-XM_036295558_branch_site.txt .
+cp ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/branch_site_neutral/myoMyo_rna-XM_036295558_branch_site_neutral.txt .
+
+
+grep 'lnL' myoMyo_rna-XM_036295537_branch_site.txt
+grep 'lnL' myoMyo_rna-XM_036295537_branch_site_neutral.txt
+
+#get out the lnl for both the neutral and the alt
+for i in *.txt; do
+grep 'lnL' ${i} > ${i}.lnL;
+sed -i -e 's/\s\+/,/g' ${i}.lnL; #change the spaces to commas
+done
+
+for i in *site.txt; do
+grep 'proportion' ${i} > ${i}.table;
+grep 'background w' ${i} >> ${i}.table;
+grep 'foreground w' ${i} >> ${i}.table;
+sed -i 's/d w/d/g' ${i}.table; #remove the ' w' from the file, as this messes up the number of cols
+sed -i -e 's/\s\+/,/g' ${i}.table; #change the spaces to commas
+done
+
+
+cat > base.csv
+gene,proportion0,proportion1,proportion2a,proportion2b,backgroundw0,backgroundw1,backgroundw2a,backgroundw2b,foregroundw0,foregroundw1,foregroundw2a,foregroundw2b,lnLnull,lnLalt
+
+
+python
+import numpy as np
+import pandas as pd
+
+base = pd.read_csv("base.csv", delimiter=',', header='infer')
+
+table = pd.read_csv("myoMyo_rna-XM_036295537_branch_site.txt.table", delimiter=',', header=None)
+lnL_alt = pd.read_csv("myoMyo_rna-XM_036295537_branch_site.txt.lnL", delimiter=',', header=None)
+lnL_null = pd.read_csv("myoMyo_rna-XM_036295537_branch_site_neutral.txt.lnL", delimiter=',', header=None)
+
+
+df.iat[0,1]
+
+lnL_alt.iat[0,4]
+lnL_null.iat[0,4]
+
+base = base.append({'gene':"file", 'proportion0':table.iat[0,1], 'proportion1':table.iat[0,2],'proportion2a':table.iat[0,3],'proportion2b':table.iat[0,4],'backgroundw0':table.iat[1,1],'backgroundw1':table.iat[1,2],'backgroundw2a':table.iat[1,3],'backgroundw2b':table.iat[1,4],'foregroundw0':table.iat[2,1],'foregroundw1':table.iat[2,2],'foregroundw2a':table.iat[2,3],'foregroundw2b':table.iat[2,4],'lnLnull':lnL_null.iat[0,4],'lnLalt':lnL_alt.iat[0,4]},ignore_index=True)
+
+
+
+
+########################## creating a loverly loop
+#make directories from the grepped lines
+mkdir grep_table
+mkdir grep_lnL
+
+#cd into the branch_site_neutral
+cd branch_site_neutral
+#get out the lnl for the neutral, removing the spaces and replacing with commas
+for i in *neutral.txt; do
+grep 'lnL' ${i} > ../grep_lnL/${i}.null.lnL;
+sed -i -e 's/\s\+/,/g' ../grep_lnL/${i}.null.lnL; #change the spaces to commas
+done
+
+#cd into the branch_site
+cd ../branch_site
+#get out the lnl for the alt, removing the spaces and replacing with commas
+#get out the MLE data from the alt too
+for i in *site.txt; do
+grep 'lnL' ${i} > ../grep_lnL/${i}.alt.lnL;
+sed -i -e 's/\s\+/,/g' ../grep_lnL/${i}.alt.lnL; #change the spaces to commas
+grep 'proportion' ${i} > ../grep_table/${i}.table;
+grep 'background w' ${i} >> ../grep_table/${i}.table;
+grep 'foreground w' ${i} >> ../grep_table/${i}.table;
+sed -i 's/d w/d/g' ../grep_table/${i}.table; #remove the ' w' from the file, as this messes up the number of cols
+sed -i -e 's/\s\+/,/g' ../grep_table/${i}.table; #change the spaces to commas
+done
+
+
+#first make sure there are no empty files, as the python script will break if there are. #should change this so it doesn't, but haven't yet
+#find empty files in the grep_table and grep_lnL directories
+find -type f -empty
+#I had to remove myoMyo_rna-XM_036327705_* myoMyo_rna-XM_036311857_* for both myobra and myoluc
+
+
+#get a file with all the names, so I can call all of them with different names
+cd ../grep_table
+ls *site.txt.table > ../file_names
+sed -i -e 's/_branch_site.txt.table//g' ../file_names
+
+#move back into the base file for the spp
+cd ..
+#create file for dictionary start file to go
+touch proto_dict
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["grep_lnL/'${i}'_branch_site_neutral.txt.null.lnL", "grep_lnL/'${i}'_branch_site.txt.alt.lnL", "grep_table/'${i}'_branch_site.txt.table"]' >> proto_dict;
+done
+
+#create base file to append onto
+cat > base.csv
+gene,proportion0,proportion1,proportion2a,proportion2b,backgroundw0,backgroundw1,backgroundw2a,backgroundw2b,foregroundw0,foregroundw1,foregroundw2a,foregroundw2b,lnLnull,lnLalt
+
+#go into python
+python
+#set package
+import pandas as pd
+
+#read in file with chrom names in 
+names = pd.read_csv("file_names", header=None)
+#read in the created proto_dict file
+proto = pd.read_csv("proto_dict", header=None, sep='\t')
+#join together
+df = pd.concat([names, proto], axis=1)
+#name the columns
+df.columns = ["name", "list"]
+#change so values will be treated separately (allows the creation of the dictionary)
+df['list'] = df['list'].apply(eval)
+#create dictionary
+dictionary = dict(zip(df.name, df.list))
+
+base = pd.read_csv("base.csv", delimiter=',', header='infer')
+
+for key,value in dictionary.items():
+	null_file = value[0]
+	lnL_null = pd.read_csv(null_file, delimiter=',', header=None)
+	alt_file = value[1]
+	lnL_alt = pd.read_csv(alt_file, delimiter=',', header=None)
+	table_file = value[2]
+	table = pd.read_csv(table_file, delimiter=',', header=None)
+	base = base.append({'gene':key, 'proportion0':table.iat[0,1], 'proportion1':table.iat[0,2],'proportion2a':table.iat[0,3],'proportion2b':table.iat[0,4],'backgroundw0':table.iat[1,1],'backgroundw1':table.iat[1,2],'backgroundw2a':table.iat[1,3],'backgroundw2b':table.iat[1,4],'foregroundw0':table.iat[2,1],'foregroundw1':table.iat[2,2],'foregroundw2a':table.iat[2,3],'foregroundw2b':table.iat[2,4],'lnLnull':lnL_null.iat[0,4],'lnLalt':lnL_alt.iat[0,4]},ignore_index=True)
+
+base.to_csv("total_PAML_outputs.csv", header=True, index=False)
+
+###########
+
+#getting the likelihood ratio test from the log likelihood values (2x (lnLalt - lnLnull))
+df = pd.read_csv("total_PAML_outputs.csv", header='infer')
+df["LRT"] = (2*(df["lnLalt"] - df["lnLnull"]))
+
+#subsetting (without correction just for numbers) #THIS IS NOT THE RIGHT VALUE, IS 3.81
+df.loc[df["LRT"] >= 3.81] #1451 genes show as significant out of 6775 for myobra (1169 for myoluc)
+
+#filtering out only the genes were both the mb and ml sequences begin with M-starts
+
+
+#want to subset to only include the m-starts?
+#read in gene_filter, with gene numbers as index
+gene_filter = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/pairwise_align/nuc_align/nuc_seq/right_startcodon_genes.csv", header='infer', index_col='gene')
+
+#first need to modify the gene names so they match properly everything else (adding .1 onto the ends)
+df['gene'] = df['gene'].astype(str) + ".1"
+
+#merge the gene_filter by index with the gene column in the df
+df2 = gene_filter.merge(df, left_index=True, right_on='gene')
+
+#drop the mb and ml columns
+df2.drop(['mb', 'ml'], axis=1, inplace=True)
+
+#write out the csv 
+df2.to_csv("Mstart_total_PAML_outputs.csv", header=True, index=False)
+
+
+
+##########
+#use R to get the p values and the adjusted p values, and port back as total_PAML_outputs_adjustedP.csv
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
