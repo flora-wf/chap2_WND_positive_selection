@@ -1,0 +1,522 @@
+#load packages
+library(ggplot2)
+library(dplyr)
+library(quantreg)
+
+
+#set working directory
+setwd("~/Documents/coding_files/")
+
+#read in the mb dataframe
+df = read.csv("Sep6_MK_mb_PAML.csv", header=TRUE, sep=",", fill=TRUE)
+df$codon_length_log <- log(df$codon_length)
+
+#first should remove the 999 omega values, as these are not reliable estimates
+df2 = subset(df, branch_mb_omega < 999)
+
+model <- rq(branch_mb_omega ~ codon_length, data = df2, tau = 0.5)
+summary(model)
+#codon length alone not significant
+model1 <- rq(branch_mb_omega ~ factor(category), data = df2, tau = 0.5)
+model1 <- rq(branch_mb_omega ~ factor(category_bin), data = df2, tau = 0.5) #both model2s are identical, solution may be nonunique think is because the category covariate is discrete
+summary(model1)
+
+#category is significant alone
+
+model2 <- rq(branch_mb_omega ~ factor(category) + codon_length, data = df2, tau=0.5)
+
+model3 <- rq(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, tau=0.5)
+summary(model3)
+#category is still significant, and codon length is still insignificant
+
+anova(model3, model2, model1) # also chooses model1 (chisq doesnt work for these)
+anova(model3, model2, test='Chisq')#p value is higher that 0.05, so we conclude the simpler model is better (model2)
+anova(model2, model1, test='Chisq')#p value is higher that 0.05, so we conclude the simpler model is better (model1)
+
+####different anova model recommended for comparing quantile regression fits
+anova(model3, model2, model1, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)
+anova(model3, model2, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)
+anova(model2, model1, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)
+
+drop1(model3, test="Chisq") #factor(category):codon_length is nonsig, so drop
+drop1(model2, test="Chisq") #both factors are non sig
+
+
+
+
+
+#running the same rationale with the overall tree omega (using the non-subsetted df)
+model4 <- rq(tree_omega ~ codon_length, data = df, tau = 0.5)
+summary(model4)
+#codon length is significant
+
+model5 <- rq(tree_omega ~ factor(category_bin), data = df, tau = 0.5) #both model2s are identical, solution may be nonunique think is because the category covariate is discrete
+summary(model5)
+#category is not significant
+
+model6 <- rq(tree_omega ~ factor(category_bin) + codon_length, data = df, tau=0.5)
+summary(model6)
+#codon length only significant, category is insignificant
+
+model7 <- rq(tree_omega ~ factor(category_bin) + codon_length + factor(category_bin)*codon_length, data = df, tau=0.5)
+summary(model7)
+#category is still not significant
+
+
+anova(model7, model6, model5) #chooses model6
+anova(model7, model6) #p value is higher that 0.05, so we conclude the simpler model is better (model6)
+anova(model6, model5) #p value is lower than 0.05, so we conclude the more complex model is better (model 6)
+anova(model6, model4) #p value is  higher that 0.05, so we conclude the simpler model is better (model4)
+#however we aren't actually care about model 4, we want to look at 
+summary(model6)
+
+#trialling the different anova
+anova(model7, model6, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is higher that 0.05, so we conclude the simpler model is better (model6)
+anova(model6, model5, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is lower than 0.05, so we conclude the more complex model is better (model 6)
+
+
+drop1(model7, test="Chisq") #says significant factor(category_bin):codon_length, so keep?
+drop1(model6, test="Chisq") #in model 6 says only to keep codon length
+
+
+###########
+#rerunning all when the codon length is logged
+#branch omega
+model10 <- rq(branch_mb_omega ~ factor(category), data = df2, tau = 0.5)
+model11 <- rq(branch_mb_omega ~ factor(category) + codon_length_log, data = df2, tau=0.5)
+model12 <- rq(branch_mb_omega ~ factor(category) + codon_length_log + factor(category)*codon_length_log, data = df2, tau=0.5)
+#testing which is the best model with anova
+anova(model11, model12, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is higher that 0.05, so we conclude the simpler model is better (model11)
+anova(model10, model11, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is higher than 0.05, so we conclude the more complex model is better (model10)
+#does drop testing agree with anova
+drop1(model12, test="Chisq") #says interaction is not significant, so drop
+drop1(model11, test="Chisq") #says neither are significant?
+drop1(model10, test='Chisq')
+#summary of best model
+summary(model10) #says that the category is significant
+#created a fully saturated model, then systematically reduced to the minimumum adequate model (only sig terms), via stepwise simplification process 
+
+#rerunning on the tree_omega
+model13 <- rq(tree_omega ~ factor(category_bin), data = df, tau = 0.5) #no warning when run, which is nice
+model14 <- rq(tree_omega ~ factor(category_bin) + codon_length_log, data = df, tau=0.5)
+model15 <- rq(tree_omega ~ factor(category_bin) + codon_length_log + factor(category_bin)*codon_length_log, data = df, tau=0.5)
+#testing which is the best model with anova
+anova(model14, model15, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is higher than 0.05, so we conclude the more complex model is better (model15)
+anova(model13, model15, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is higher than 0.05, so we conclude the more complex model is better (model15)
+#does drop testing agree with anova
+drop1(model15, test="Chisq") #says interaction is significant, so keep
+drop1(model14, test="Chisq") #says only the codon length is sig?
+#summary of best model
+summary(model15) #says all factors are significant
+
+
+#####re-running the tree omega GLM
+model16 <- glm(tree_omega ~ factor(category), data = df, family = "Gamma")
+model17 <- glm(tree_omega ~ factor(category) + codon_length_log, data = df, family = "Gamma")
+model18 <- glm(tree_omega ~ factor(category) + codon_length_log + factor(category)*codon_length_log, data = df, family = "Gamma")
+#testing which model is the best with anova
+anova(model17, model18, test='Chisq') #have to specify test=chisq to get sig value. sig value shows adding the extra parameter significantly improves the fit of the model
+anova(model16, model17, test='Chisq') #have to specify test=chisq to get sig value. sig value shows adding the extra parameter significantly improves the fit of the model
+#seeing if drop testing works
+drop1(model18, test='Chisq') #says the interaction is significant, but not the category 
+drop1(model17, test='Chisq') #says both category and log_length are significant
+drop1(model16, test='Chisq') #says category is significant
+#summary of best model
+summary(model18)
+
+
+##seeing what the actual pattern is
+immune_df = df[df$category == "immune",]
+nonimmune_df = df[df$category == "non_immune",]
+immune_df2 = df2[df2$category == "immune",]
+nonimmune_df2 = df2[df2$category == "non_immune",]
+
+
+####finding the residuals of each immune and non-immune so we can draw a nice graph
+#making an lm for each category, then can use the predict function on each
+immune_mod <- lm(tree_omega ~ codon_length_log, data=immune_df)
+nonimmune_mod <- lm(tree_omega ~ codon_length_log, data=nonimmune_df)
+
+#create data range to predict for for the codon_length_log
+log_range <- data.frame(codon_length_log = c(0,1,2,3,4,5,6,7,8,9,10))
+log_immune_predicted <- predict(immune_mod, newdata = log_range, interval = 'confidence')
+log_nonimmune_predicted <- predict(nonimmune_mod, newdata = log_range, interval = 'confidence')
+
+log_immune_predicted_df <- as.data.frame(log_immune_predicted)
+log_immune_predicted_df$codon_length_log <- c(0,1,2,3,4,5,6,7,8,9,10)
+log_immune_predicted_df$category <- "immune"
+
+log_nonimmune_predicted_df <- as.data.frame(log_nonimmune_predicted)
+log_nonimmune_predicted_df$codon_length_log <- c(0,1,2,3,4,5,6,7,8,9,10)
+log_nonimmune_predicted_df$category <- "nonimmune"
+
+total_predicted_df <- rbind(log_immune_predicted_df, log_nonimmune_predicted_df)
+
+ggplot(data=total_predicted_df, aes(x=codon_length_log, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), alpha = 0.3)
+
+###see what this looks like with the non_logged codon length
+#making an lm for each category, then can use the predict function on each
+immune_mod <- lm(tree_omega ~ codon_length, data=immune_df)
+nonimmune_mod <- lm(tree_omega ~ codon_length, data=nonimmune_df)
+
+#create data range to predict for for the codon_length
+range <- data.frame(codon_length = c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000))
+immune_predicted <- predict(immune_mod, newdata = range, interval = 'confidence')
+nonimmune_predicted <- predict(nonimmune_mod, newdata = range, interval = 'confidence')
+
+immune_predicted_df <- as.data.frame(immune_predicted)
+immune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+immune_predicted_df$category <- "immune"
+
+nonimmune_predicted_df <- as.data.frame(nonimmune_predicted)
+nonimmune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+nonimmune_predicted_df$category <- "nonimmune"
+
+total_predicted_df <- rbind(immune_predicted_df, nonimmune_predicted_df)
+
+ggplot(data=total_predicted_df, aes(x=codon_length, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), alpha = 0.3)
+
+
+###can I use predict on a gamma glm?
+###see what this looks like with the non_logged codon length
+#making an lm for each category, then can use the predict function on each
+immune_mod <- glm(tree_omega ~ codon_length, data=immune_df, family="Gamma")
+nonimmune_mod <- glm(tree_omega ~ codon_length, data=nonimmune_df, family="Gamma")
+
+#create data range to predict for for the codon_length
+range <- data.frame(codon_length = c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000))
+immune_predicted <- predict(immune_mod, newdata = range, interval = 'confidence', type='response')
+nonimmune_predicted <- predict(nonimmune_mod, newdata = range, interval = 'confidence', type='response')
+
+immune_predicted_df <- as.data.frame(immune_predicted)
+immune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+immune_predicted_df$category <- "immune"
+immune_predicted_df <- immune_predicted_df %>%
+  rename(fit = immune_predicted)
+
+nonimmune_predicted_df <- as.data.frame(nonimmune_predicted)
+nonimmune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+nonimmune_predicted_df$category <- "nonimmune"
+nonimmune_predicted_df <- nonimmune_predicted_df %>%
+  rename(fit = nonimmune_predicted)
+
+total_predicted_df <- rbind(immune_predicted_df, nonimmune_predicted_df)
+
+ggplot(data=total_predicted_df, aes(x=codon_length, y=fit, fill=category)) +
+  geom_line(aes(colour=category))
+
+#don't know why I can't get confidence intervals for this one
+
+
+### 
+immune_mod <- rq(tree_omega ~ codon_length, data = immune_df, tau = 0.5)
+nonimmune_mod <- rq(tree_omega ~ codon_length, data = nonimmune_df, tau = 0.5)
+
+#create data range to predict for for the codon_length
+range <- data.frame(codon_length = c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000))
+immune_predicted <- predict(immune_mod, newdata = range, interval = 'confidence')
+nonimmune_predicted <- predict(nonimmune_mod, newdata = range, interval = 'confidence')
+
+immune_predicted_df <- as.data.frame(immune_predicted)
+immune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+immune_predicted_df$category <- "immune"
+
+
+nonimmune_predicted_df <- as.data.frame(nonimmune_predicted)
+nonimmune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+nonimmune_predicted_df$category <- "nonimmune"
+
+
+total_predicted_df <- rbind(immune_predicted_df, nonimmune_predicted_df)
+
+ggplot(data=total_predicted_df, aes(x=codon_length, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = higher), alpha = 0.3)
+
+
+
+###can I use predict on a gamma glm?
+###see what this looks like with the non_logged codon length
+#making an lm for each category, then can use the predict function on each
+immune_mod <- glm(tree_omega ~ codon_length_log, data=immune_df, family="Gamma")
+nonimmune_mod <- glm(tree_omega ~ codon_length_log, data=nonimmune_df, family="Gamma")
+
+#create data range to predict for for the codon_length
+range <- data.frame(codon_length_log = c(0,1,2,3,4,5,6,7,8,9,10))
+immune_predicted <- predict(immune_mod, newdata = range, interval = 'confidence', type='response')
+nonimmune_predicted <- predict(nonimmune_mod, newdata = range, interval = 'confidence', type='response')
+
+immune_predicted_df <- as.data.frame(immune_predicted)
+immune_predicted_df$codon_length_log <- c(0,1,2,3,4,5,6,7,8,9,10)
+immune_predicted_df$category <- "immune"
+immune_predicted_df <- immune_predicted_df %>%
+  rename(fit = immune_predicted)
+
+nonimmune_predicted_df <- as.data.frame(nonimmune_predicted)
+nonimmune_predicted_df$codon_length_log <- c(0,1,2,3,4,5,6,7,8,9,10)
+nonimmune_predicted_df$category <- "nonimmune"
+nonimmune_predicted_df <- nonimmune_predicted_df %>%
+  rename(fit = nonimmune_predicted)
+
+total_predicted_df <- rbind(immune_predicted_df, nonimmune_predicted_df)
+
+ggplot(data=total_predicted_df, aes(x=codon_length_log, y=fit, fill=category)) +
+  geom_line(aes(colour=category))
+
+#don't know why I can't get confidence intervals for this one
+
+
+### 
+immune_mod <- rq(tree_omega ~ codon_length_log, data = immune_df, tau = 0.5)
+nonimmune_mod <- rq(tree_omega ~ codon_length_log, data = nonimmune_df, tau = 0.5)
+
+#create data range to predict for for the codon_length
+range <- data.frame(codon_length_log = c(0,1,2,3,4,5,6,7,8,9,10))
+immune_predicted <- predict(immune_mod, newdata = range, interval = 'confidence', type = 'response')
+nonimmune_predicted <- predict(nonimmune_mod, newdata = range, interval = 'confidence', type = 'response')
+
+immune_predicted_df <- as.data.frame(immune_predicted)
+immune_predicted_df$codon_length_log <-c(0,1,2,3,4,5,6,7,8,9,10)
+immune_predicted_df$category <- "immune"
+
+
+nonimmune_predicted_df <- as.data.frame(nonimmune_predicted)
+nonimmune_predicted_df$codon_length_log <- c(0,1,2,3,4,5,6,7,8,9,10)
+nonimmune_predicted_df$category <- "nonimmune"
+
+
+total_predicted_df <- rbind(immune_predicted_df, nonimmune_predicted_df)
+
+ggplot(data=total_predicted_df, aes(x=codon_length_log, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = higher), alpha = 0.3)
+
+
+
+
+######
+#branch_omega
+
+### 
+immune_mod <- rq(branch_mb_omega ~ codon_length, data = immune_df2, tau = 0.5)
+nonimmune_mod <- rq(branch_mb_omega ~ codon_length, data = nonimmune_df2, tau = 0.5)
+
+#create data range to predict for for the codon_length
+range <- data.frame(codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000))
+immune_predicted <- predict(immune_mod, newdata = range, interval = 'confidence', type = 'response')
+nonimmune_predicted <- predict(nonimmune_mod, newdata = range, interval = 'confidence', type = 'response')
+
+immune_predicted_df <- as.data.frame(immune_predicted)
+immune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+immune_predicted_df$category <- "immune"
+
+
+nonimmune_predicted_df <- as.data.frame(nonimmune_predicted)
+nonimmune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+nonimmune_predicted_df$category <- "nonimmune"
+
+
+total_predicted_df <- rbind(immune_predicted_df, nonimmune_predicted_df)
+
+ggplot(data=total_predicted_df, aes(x=codon_length, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = higher), alpha = 0.3)
+
+#BRANCH OMEGA FOR MYOLUC
+#rerunning all when the codon length is logged
+#branch omega
+model10 <- rq(branch_mb_omega ~ factor(category), data = df2, tau = 0.5)
+model11 <- rq(branch_mb_omega ~ factor(category) + codon_length_log, data = df2, tau=0.5)
+model12 <- rq(branch_mb_omega ~ factor(category) + codon_length_log + factor(category)*codon_length_log, data = df2, tau=0.5)
+#testing which is the best model with anova
+anova(model11, model12, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is lower that 0.05, so we conclude the complex model is better (model11)
+anova(model10, model11, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is lower than 0.05, so we conclude the more complex model is better (model10)
+#does drop testing agree with anova
+drop1(model12, test="Chisq") #says interaction is not significant, so drop
+drop1(model11, test="Chisq") #says neither are significant?
+drop1(model10, test='Chisq')
+#summary of best model
+summary(model10) #says that the category is not significant, only intercept
+
+#rerunning all when the codon length is not logged
+#branch omega
+model10 <- rq(branch_mb_omega ~ factor(category), data = df2, tau = 0.5)
+model11 <- rq(branch_mb_omega ~ factor(category) + codon_length, data = df2, tau=0.5)
+model12 <- rq(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, tau=0.5)
+#testing which is the best model with anova
+anova(model11, model12, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is higher that 0.05, so we conclude the simpler model is better (model11)
+anova(model10, model11, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is lower than 0.05, so we conclude the more complex model is better (model11)
+#does drop testing agree with anova
+drop1(model12, test="Chisq") #says interaction is not significant, so drop
+drop1(model11, test="Chisq") #says neither are significant?
+drop1(model10, test='Chisq')
+#summary of best model
+summary(model11) #says that the category is not significant, but intercept and codon length is 
+
+##
+immune_mod <- rq(branch_mb_omega ~ codon_length, data = immune_df, tau=0.5)
+nonimmune_mod <- rq(branch_mb_omega ~ codon_length, data = nonimmune_df, tau = 0.5)
+
+#create data range to predict for for the codon_length
+range <- data.frame(codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000))
+immune_predicted <- predict(immune_mod, newdata = range, interval = 'confidence', type = 'response')
+nonimmune_predicted <- predict(nonimmune_mod, newdata = range, interval = 'confidence', type = 'response')
+
+immune_predicted_df <- as.data.frame(immune_predicted)
+immune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+immune_predicted_df$category <- "immune"
+
+
+nonimmune_predicted_df <- as.data.frame(nonimmune_predicted)
+nonimmune_predicted_df$codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+nonimmune_predicted_df$category <- "nonimmune"
+
+
+total_predicted_df <- rbind(immune_predicted_df, nonimmune_predicted_df)
+
+ggplot(data=tree_predicted, aes(x=codon_length, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = higher), alpha = 0.3)
+
+
+
+
+
+
+
+
+################
+#repeating the predict function
+#creating a new dataframe
+codon_length  <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000, 0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+category <- c("immune", "immune", "immune", "immune", "immune", "immune", "immune", "immune", "immune", "immune", "immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune")
+new_data <- data.frame(codon_length, category)
+
+#set working directory
+setwd("~/Documents/coding_files/")
+
+#read in the mb dataframe
+df = read.csv("Sep6_MK_mb_PAML.csv", header=TRUE, sep=",", fill=TRUE)
+#don't need to subset, as there are no 999 omega estimates for the tree
+tree_model <- glm(tree_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df, family = "Gamma")
+#log tree model has slightly better AIC, and this negates any negative estimations of the mean, so is more appropriate than 
+log_tree_model <- glm(tree_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df, family = "Gamma"(link="log"))
+#the prediction function does not do prediction intervals for gamma distribution :(
+tree_predicted <- predict(log_tree_model, newdata = new_data, interval = 'confidence', type = 'response')
+
+###ALTERNATIVE 1
+#Fit a gamma model and extract the model matrix
+mod   = glm(tree_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df, family = "Gamma"(link="log"))
+alpha = (mod$deviance/mod$df.residual)^-1  # 
+X     = model.matrix(mod)
+n     = nrow(X); p = ncol(X) 
+
+#Assume prediction is required at x1 =0.75 and x2 = -1 (pos 2 and 3 in this list respectively)
+x0    = c(1,2000,0)
+pred  = exp(x0%*%coef(mod)) # Prediction of y at x0 #ERRORS HERE
+
+#####ALTERNATIVE 2
+model <- glm(tree_omega ~ codon_length, data = df, family = "Gamma")
+
+codon_length <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+
+p<-predict(model, data.frame(new_data), interval="confidence", level=.95)
+
+p.tr <- 1/p # log link according to ?glm
+
+prediction <- data.frame(codon_length = as.numeric(names(p)), tree_omega = 1/p)
+
+
+ggplot(data = df, aes(x = codon_length, y = tree_omega)) +
+  geom_line(data= prediction) +
+  stat_smooth(data = df, method = "glm",
+              formula = y+0.001 ~ log(x) + I(log(x)^2),
+              method.args = c(family = Gamma))
+
+############
+#what does the quantile regression look like again, could we just use that?
+#rerunning on the tree_omega
+model13 <- rq(tree_omega ~ factor(category), data = df, tau = 0.5) #no warning when run, which is nice
+model14 <- rq(tree_omega ~ factor(category) + codon_length, data = df, tau=0.5)
+model15 <- rq(tree_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df, tau=0.5)
+#testing which is the best model with anova
+anova(model14, model15, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is higher than 0.05, so we conclude the more complex model is better (model15)
+anova(model13, model15, test = "Wald", joint = TRUE, score ="tau", se = "nid", R = 200, trim = NULL)#p value is higher than 0.05, so we conclude the more complex model is better (model15)
+#does drop testing agree with anova
+drop1(model15, test="Chisq") #says interaction is significant, so keep
+drop1(model14, test="Chisq") #says only the codon length is sig?
+#summary of best model
+summary(model15) #says all factors are significant
+
+#creating a new dataframe
+codon_length  <- c(0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000, 0,100,1000, 1500, 2000, 2800, 3000, 3500, 4000, 4200, 5000)
+category <- c("immune", "immune", "immune", "immune", "immune", "immune", "immune", "immune", "immune", "immune", "immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune", "non_immune")
+new_data <- data.frame(codon_length, category)
+
+tree_predicted <- predict(model15, newdata = new_data, interval = 'confidence', type = 'response')
+total_predicted_df <- cbind(new_data, tree_predicted)
+
+ggplot(data=total_predicted_df, aes(x=codon_length, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = higher), alpha = 0.3) +
+  ggtitle("Predictive fit with whole tree selection") +
+  theme_classic() +
+  scale_fill_manual(values = alpha(c("darkseagreen2", "darkseagreen4"),), labels=c("Immune", "Non-immune"), name="Gene category") +
+  xlab("Codon length") + 
+  ylab("Predicted whole tree omega value") 
+
+
+
+
+#########redoing the predict functions for the branch omegas all on the same 
+#myobra
+#read in the mb dataframe
+df = read.csv("Sep6_MK_mb_PAML.csv", header=TRUE, sep=",", fill=TRUE)
+#first should remove the 999 omega values, as these are not reliable estimates
+df2 = subset(df, branch_mb_omega < 999)
+#best model for myobra branch omega
+model10 <- rq(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, tau = 0.5)
+tree_predicted_10 <- predict(model10, newdata = new_data, interval = 'confidence', type = 'response')
+total_predicted_10_df <- cbind(new_data, tree_predicted_10)
+
+ggplot(data=total_predicted_10_df, aes(x=codon_length, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = higher), alpha = 0.3) +
+  ggtitle("Predictive fit with M. brandtii foreground") +
+  theme_classic() +
+  scale_fill_manual(values = alpha(c("darkseagreen2", "darkseagreen4"),), labels=c("Immune", "Non-immune"), name="Gene category") +
+  xlab("Codon length") + 
+  ylab("Predicted foreground branch omega value") 
+
+
+
+
+
+
+############
+#myoluc
+#read in the ml dataframe
+df = read.csv("Sep30_ml_big.csv", header=TRUE, sep=",", fill=TRUE)
+#first should remove the 999 omega values, as these are not reliable estimates
+df2 = subset(df, branch_mb_omega < 999)
+#best model for myobra branch omega
+model10 <- rq(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, tau = 0.5)
+tree_predicted_10 <- predict(model10, newdata = new_data, interval = 'confidence', type = 'response')
+total_predicted_10_df <- cbind(new_data, tree_predicted_10)
+
+ggplot(data=total_predicted_10_df, aes(x=codon_length, y=fit, fill=category)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = higher), alpha = 0.3) +
+  ggtitle("Predictive fit with M. lucifugus foreground") +
+  theme_classic() +
+  scale_fill_manual(values = alpha(c("darkseagreen2", "darkseagreen4"),), labels=c("Immune", "Non-immune"), name="Gene category") +
+  xlab("Codon length") + 
+  ylab("Predicted foreground branch omega value") 
+
+
+#best model for myoluc branch omega
+model11 <- rq(branch_mb_omega ~ factor(category) + codon_length, data = df2, tau=0.5)
