@@ -1,0 +1,294 @@
+#running PAML model to get dn/ds estimate for each protein across the whole tree
+
+#go to the base directory
+cd ~/Datafiles/Bats/GCF_rerun_0821
+#make directory
+mkdir PAML_omega_estimate
+cd PAML_omega_estimate
+
+
+
+#####SETTING UP FOR WHOLE GENOME, MYOBRA ONLY as running across the whole tree
+#no need for a null model
+
+
+#copy over the nuc_MSA files
+cp -R ../PAML_pub59/nuc_MSAs nuc_MSAs
+#copy over the tree file
+cp ../PAML_pub59/num_myobra_forward_tree.txt .
+
+#make directories for ctl files, and results, myobra only
+#results directories
+mkdir selection_tests
+#control directory
+mkdir ctl_files
+
+
+#add perl make files into the nuc_MSAs directory
+cd nuc_MSAs
+
+#make file for myobra forward neutral runs
+cat > omega_est_make.perl
+
+#define file array
+my @files = <*.MSA>;
+
+for my $file(@files){
+		my @filename = split /\./, $file;
+		my $outfile = "/pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_omega_estimate/ctl_files/@filename[0]_omega_est.ctl";
+		open OUTFILE, ">$outfile" or die "Cannot open $outfile: $!";
+		print OUTFILE "seqfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_omega_estimate/nuc_MSAs/@filename[0].1.nuc.MSA\n";
+		print OUTFILE "treefile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_omega_estimate/num_myobra_forward_tree.txt\n";
+		print OUTFILE "outfile = /pub59/florawf/Datafiles/Bats/GCF_rerun_0821/PAML_omega_estimate/selection_tests/@filename[0]_omega_est.txt\n";
+		print OUTFILE "noisy = 0\n";
+		print OUTFILE "verbose = 1\n";
+		print OUTFILE "runmode = 0\n";
+		print OUTFILE "seqtype = 1\n";
+		print OUTFILE "CodonFreq = 2\n";
+		print OUTFILE "ndata = 1\n";
+		print OUTFILE "clock = 0\n";
+		print OUTFILE "model = 0\n";
+		print OUTFILE "NSsites = 0\n";
+		print OUTFILE "fix_kappa = 0\n";
+		print OUTFILE "kappa = 2\n";
+		print OUTFILE "fix_omega = 0\n";
+		print OUTFILE "omega = 0.4\n";
+		print OUTFILE "fix_alpha = 1\n";
+		print OUTFILE "alpha = 0.\n";
+		print OUTFILE "Malpha = 0\n";
+		print OUTFILE "ncatG = 8\n";
+		print OUTFILE "getSE = 0\n";
+		print OUTFILE "RateAncestor = 1\n";
+		print OUTFILE "Small_Diff = 0.5e-6\n";
+		print OUTFILE "cleandata =1\n";
+		print OUTFILE "fix_blength =-1\n";
+		print OUTFILE "method =0";
+		close OUTFILE;
+				}
+				
+
+
+#create the ctl files
+perl omega_est_make.perl
+
+
+#check numbers to see if there are the right number of control files (6777)
+
+#set up screens for each to run separately
+#cd into the correct ctl directory 
+conda activate py27
+
+for f in *.ctl
+do
+codeml $f
+done
+
+
+####
+#grep out the omega estimates and kappa values for the whole tree
+
+#cd to the correct file
+cd ~/Datafiles/Bats/GCF_rerun_0821/PAML_omega_estimate/selection_tests
+
+#create directory for files to go into
+mkdir grep_omega
+mkdir grep_kappa
+
+#sed line removes the spaces in a temp file
+#cut line divides the phrase by the space delimiter, and choses the second half of the phrase, and saves to final file
+#then removes the temp file
+
+
+for i in *.txt; do
+grep 'kappa (ts/tv) =' ${i} > ${i}.kappa1;
+sed -i -e 's/ //g' ${i}.kappa1;
+cat ${i}.kappa1 | cut -d= -f2 > grep_kappa/${i}.kappa;
+rm ${i}.kappa1;
+grep 'omega (dN/dS) =' ${i} > ${i}.omega1;
+sed -i -e 's/ //g' ${i}.omega1;
+cat ${i}.omega1 | cut -d= -f2 > grep_omega/${i}.omega;
+rm ${i}.omega1;
+done
+
+#look to find if there are any empty files
+cd grep_omega
+find -type f -empty
+
+#getting rid of ./myoMyo_rna-XM_036327705_branch_site.txt.alt.lnL ./myoMyo_rna-XM_036327705_branch_site_neutral.txt.null.lnL ./myoMyo_rna-XM_036311857_branch_site_neutral.txt.null.lnL ./myoMyo_rna-XM_036311857_branch_site.txt.alt.lnL
+
+#get a file with all the names, so I can call all of them with different names
+ls *omega > ../file_names
+sed -i -e 's/_omega_est.txt.omega//g' ../file_names
+
+
+#move back into the main folder
+#create a file to grow the database from
+cat > base.csv 
+gene,omega,kappa
+
+#create file for dictionary start file to go
+touch proto_dict
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["grep_omega/'${i}'_omega_est.txt.omega", "grep_kappa/'${i}'_omega_est.txt.kappa"]' >> proto_dict;
+done
+
+#start python
+python
+import pandas as pd
+
+#read in file with chrom names in 
+names = pd.read_csv("file_names", header=None)
+#read in the created proto_dict file
+proto = pd.read_csv("proto_dict", header=None, sep='\t')
+#join together
+df = pd.concat([names, proto], axis=1)
+#name the columns
+df.columns = ["name", "list"]
+#change so values will be treated separately (allows the creation of the dictionary)
+df['list'] = df['list'].apply(eval)
+#create dictionary
+dictionary = dict(zip(df.name, df.list))
+
+#read the base csv
+base = pd.read_csv("base.csv", delimiter=',', header='infer')
+
+for key,value in dictionary.items():
+	omega_file = value[0]
+	omega_db = pd.read_csv(omega_file, delimiter=',', header=None)
+	omega = omega_db.loc[0,0]
+	kappa_file = value[1]
+	kappa_db = pd.read_csv(kappa_file, delimiter=',', header=None)
+	kappa = kappa_db.loc[0,0]
+	base = base.append({'gene':key, 'omega':omega,'kappa':kappa},ignore_index=True)
+
+base['gene'] = base['gene'].astype(str) + '.1'
+
+base.to_csv("total_PAML_omega_est.csv", header=True, index=False)
+
+        
+#concat the omega_est to the total results file
+cd ~/Datafiles/Bats/GCF_rerun_0821/Results/PAML
+
+python
+import pandas as pd
+
+#read the big results data table, no index #background set M starts only, with LRT, p and adjusted, but no gene lengths
+df = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/total_PAML_outputs_adjustedP.csv", index_col=0, header='infer')
+#5857
+
+#read in the new results table
+df2 = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/PAML_omega_estimate/selection_tests/total_PAML_omega_est.csv", index_col=0, header='infer')
+#6775
+df2.rename(columns={'omega':'tree_omega'}, inplace=True)
+df2.rename(columns={'kappa':'tree_kappa'}, inplace=True)
+
+#merge on the index of both 
+df3 = pd.merge(df, df2, left_on='gene', right_index=True)
+#5857
+
+#gene lengths with just gene no and length (codon AA)
+lengths = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/gene_lengths.csv", header='infer', index_col=0)
+#merge the lengths to the dataframe
+df4 = pd.merge(df3, lengths, left_on='gene', right_index=True)
+#5857
+
+#rename column to specify length is the number of codons
+df4.rename(columns={'length':'codon_length'}, inplace=True)
+#add in the nucleotide length too
+df4['nuc_length'] = df4['codon_length']*3
+
+#add in the gene symbols for this datafram
+lookup = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes", delimiter=' ', header=None, index_col = 0)
+#change symbol col name before merge
+lookup = lookup.rename(columns={1:'symbol'})
+#6341
+df5 = pd.merge(lookup, df4, left_index=True, right_on='gene')
+#5495
+
+#read in immune gene list
+immune_names = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/PAML/HG_numbers/immune_universal.c", header=None, index_col=0)
+#854
+#read in non-immune list
+non_immune_names = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/Results/PAML/HG_numbers/non_immune_universal", header=None, index_col=0)
+#4642
+
+#set the gene column as an index in the big dataframe
+df5 = df5.set_index('symbol')
+
+#found a better way to filter than by merge!
+#filtering only the immune names
+immune_df = pd.merge(df5, immune_names, left_index=True, right_index=True)
+#853
+#adding in category column, and filling with immune
+immune_df['category'] = 'immune'
+
+#filtering only the nonimmune names
+non_immune_df = pd.merge(df5, non_immune_names, left_index=True, right_index=True)
+#adding in category column, and filling with non_immune
+non_immune_df['category'] = 'non_immune'
+
+#concat the two columns together, to make one big dataframe
+cat_big_df = pd.concat([immune_df, non_immune_df])
+#5495
+
+
+#save out the big dataframe
+cat_big_df.to_csv("Aug22_bg_total.csv", header=True, index=True)
+
+
+####
+#adding in the binary yes/no myobra sig for bs
+
+#need to first create a list of genes that are not the uniq myobra genes
+awk 'FNR==NR {a[$0]++; next} !($0 in a)' ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/comparison/myobra_uniq_gene_symbols ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/comparison/all_gene_symbols > ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/comparison/non_myobra_uniq_genes #4732 genes
+
+#start python
+python 
+import pandas as pd
+
+#read in big df
+df = pd.read_csv("Aug22_bg_total.csv", header='infer', index_col=0)
+
+#read in myobra uniq gene symbols list 763
+sig_genes = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/comparison/myobra_uniq_gene_symbols", header=None, index_col=0)
+nonsig_genes = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/comparison/non_myobra_uniq_genes", header=None, index_col=0)
+
+#filtering for the sig genes
+sig = pd.merge(df, sig_genes, left_index=True, right_index=True)
+non_sig = pd.merge(df, nonsig_genes, left_index=True, right_index=True)
+#add in yes or no 
+sig['bs_mb_uniq_sig'] = 'yes'
+non_sig['bs_mb_uniq_sig'] = 'no'
+
+#concat together
+big = pd.concat([sig, non_sig])
+#rename the columns so I know which model the info is coming from
+big = big.rename(columns={'proportion0':'bs_proportion0', 'proportion1':'bs_proportion1', 'proportion2a':'bs_proportion2a', 'proportion2b':'bs_proportion2b', 'backgroundw0':'bs_backgroundw0', 'backgroundw1':'bs_backgroundw1', 'backgroundw2a':'bs_backgroundw2a', 'backgroundw2b':'bs_backgroundw2b', 'foregroundw0':'bs_foregroundw0', 'foregroundw1':'bs_foregroundw1', 'foregroundw2a':'bs_foregroundw2a', 'foregroundw2b':'bs_foregroundw2b', 'lnLnull':'bs_lnLnull', 'lnLalt':'bs_lnLalt', 'LRT':'bs_LRT', 'p_values':'bs_p_values', 'adjusted_p':'bs_adjusted_p'})
+
+#read in the branch_only df
+branch = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/PAML_branch/selection_tests/myobra_forward/total_PAML_branch_LRT.csv", header='infer')
+
+#merge the dataframes together
+final = pd.merge(big, branch, left_on='gene', right_on='gene')
+
+#rewrite over the file
+final.to_csv("Aug22_bg_total.csv", index=True, header=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
