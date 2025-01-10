@@ -1,0 +1,61 @@
+#running chi-squared and the multiple-test corrections
+#import packages
+library(dplyr)
+#set working directory
+setwd("~/Documents/coding_files/PAML_0722")
+
+#reading in the table for myobra
+df = read.csv("myobra/Mstart_total_PAML_outputs.csv", header=TRUE)
+
+df = df %>% mutate(p_values = (pchisq(df$LRT, df=1, lower.tail=FALSE)))
+
+df = df %>% mutate(adjusted_p = p.adjust(df$p_values, method="holm"))
+
+sig = df %>% filter(p_values <= 0.05) #1211 myobra
+adjusted_sig = df %>% filter(adjusted_p <= 0.05) #1052 myobra
+
+write.csv(df, "myobra/total_PAML_outputs_adjustedP.csv")
+
+
+#reading in the table for myobra
+df = read.csv("myoluc/Mstart_total_PAML_outputs.csv", header=TRUE)
+
+df = df %>% mutate(p_values = (pchisq(df$LRT, df=1, lower.tail=FALSE)))
+
+df = df %>% mutate(adjusted_p = p.adjust(df$p_values, method="holm"))
+
+sig = df %>% filter(p_values <= 0.05) #936 myoluc
+adjusted_sig = df %>% filter(adjusted_p <= 0.05) #740 myoluc
+
+write.csv(df, "myoluc/total_PAML_outputs_adjustedP.csv")
+
+
+
+#doing this again for the branch modles
+#set working directory
+setwd("~/Documents/coding_files/")
+
+#reading in the table for myobra
+df = read.csv("Sep6_MK_mb_PAML.csv", header=TRUE)
+
+df = df %>% mutate(branch_p_values = (pchisq(df$branch_LRT, df=1, lower.tail=FALSE)))
+
+df = df %>% mutate(branch_adjusted_p = p.adjust(df$branch_p_values, method="holm"))
+
+sig = df %>% filter(branch_p_values <= 0.05) #1176 myobra
+adjusted_sig = df %>% filter(branch_adjusted_p <= 0.05) #414 myobra
+
+write.csv(df, "Sep6_MK_mb_PAML.csv")
+
+
+#reading in the table for myoluc
+df = read.csv("Sep30_ml_big.csv", header=TRUE)
+
+df = df %>% mutate(branch_p_values = (pchisq(df$branch_LRT, df=1, lower.tail=FALSE)))
+
+df = df %>% mutate(branch_adjusted_p = p.adjust(df$branch_p_values, method="holm"))
+
+sig = df %>% filter(branch_p_values <= 0.05) #912 myobra
+adjusted_sig = df %>% filter(branch_adjusted_p <= 0.05) #279 myobra
+
+write.csv(df, "Sep30_ml_big.csv")
