@@ -1,0 +1,55 @@
+#trying to get more detailed go terms for my genes
+#make a folder for these to go into
+cd ~/Datafiles/Bats/GCF_rerun_0821
+mkdir eggnog_GO
+cd eggnog_GO
+
+#need to get file with all the gene numbers so can copy them over nicely
+#open python to create this
+python
+import pandas as pd
+#lookup gene names and numbers
+lookup = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/yn00/between_spp/lookup_genes", delimiter=' ', header=None, index_col = 1)
+#background gene names used in analysis
+df = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/comparison/all_gene_symbols", header=None, index_col=0)
+
+#found a better way to filter than by merge!
+#filtering only the immune names
+names_df = lookup.loc[df.index]
+
+#write out the gene numbers
+names_df.to_csv("background_gene_no", index=False, header=False)
+
+#open file and modify to add in the extra bit to make into the file name
+df = pd.read_csv("background_gene_files", header=None)
+#add in
+df[0] = df[0].astype(str) + ".nuc.MSA.line"
+#read out this csv
+df.to_csv("background_gene_files", index=False, header=False)
+#quit python
+
+#####copy over the files I want using these 
+mkdir background_genes
+#move to the directory you want to copy from
+cd ~/Datafiles/Bats/GCF_rerun_0821/yn00/within/myobra/nuc_seq
+
+#copy all of the relevant files
+for line in $(cat ~/Datafiles/Bats/GCF_rerun_0821/eggnog_GO/background_gene_files); do cp $line ~/Datafiles/Bats/GCF_rerun_0821/eggnog_GO/background_genes/.; done
+
+#go back to the start directory
+cd ~/Datafiles/Bats/GCF_rerun_0821/eggnog_GO/
+#create an empty base file
+touch background_gene_seqs
+#write loop to get out the first two lines of each file (the fasta name and sequence)
+for i in background_genes/*.line; do
+head -n 2 $i >> background_gene_seqs;
+done
+
+#rename the files so that they match the gene names
+sed -i 's/mB_mM/myoMyo/g' background_gene_seqs
+
+#zip the file for eggnog
+gzip background_gene_seqs
+
+#run on eggnog, with the taxonomic limitations being chiroptera
+
