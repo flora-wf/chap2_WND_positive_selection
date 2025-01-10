@@ -1,0 +1,560 @@
+###immune lengths
+#load packages
+library(ggplot2)
+library(dplyr)
+library(forcats)
+library(lme4)
+
+#set working directory
+setwd("~/Documents/coding_scripts/Chap1+2/working_script/Results_analysis/")
+
+df = read.csv("Aug22_bg_total.csv", header=TRUE, sep=",", fill=TRUE)
+
+sig_df = filter(df, adjusted_p <= 0.05)
+
+#looking at the distribution of omega values across the whole tree between immune and non-immune, all genes not just significant
+#boxplot
+ggplot(df,                                    
+       aes(x = category,
+           y = tree_omega,
+           fill = category)) +
+  geom_boxplot() +
+  xlab("Gene category") + 
+  ylab("dN/dS over tree") +
+  labs(fill = "Gene category")
+
+#look at gene lengths and dnds. all genes not just significant
+#scatterplot
+#reorder the dataframe so all the immune rows are at the back
+df_reorder <- df[c(854:nrow(df), 1:853), ]  
+
+df_reorder %>% ggplot(aes(x = codon_length,
+           y = tree_omega,
+           fill = category,
+           colour = factor(category))) +
+  geom_point() +
+  ggtitle("tree omega and codon length")
+
+#look at gene lengths and dnds as a series of boxplots
+ggplot(data = df, (mapping = aes(x=codon_length, y=tree_omega))) +
+  geom_boxplot(mapping = aes(group = cut_width(codon_length, 100)))
+
+#need to see if it is normally distributed
+#create subsetted bits to look at distribution of the w2 in immune and non-immune categories
+immune_df = df[df$category == "immune",]
+nonimmune_df = df[df$category == "non_immune",]
+
+#carrying out a shapiro-wilk test for normality
+#tree_omega
+shapiro.test(immune_df$tree_omega) #W = 0.81439, p-value < 2.2e-16 = not normal
+shapiro.test(nonimmune_df$tree_omega) #W = 0.88043, p-value < 2.2e-16 = not normal
+#gene length
+shapiro.test(immune_df$codon_length) #W = 0.73303, p-value < 2.2e-16 = not normal
+shapiro.test(nonimmune_df$codon_length) #W = 0.76827, p-value < 2.2e-16 = not normal
+
+#visualising distributions, both look like a poisson distribution (Gamma for non count data)
+#tree_omega values
+ggplot(immune_df, aes(x=tree_omega)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=tree_omega)) + geom_histogram()
+#gene lengths
+ggplot(immune_df, aes(x=codon_length)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=codon_length)) + geom_histogram()
+
+#testing the if the distribution of the tree-omega values is identical between immune and non-immune genes
+#using a mann-whitney u test as the distribution is non-normal
+wilcox.test(tree_omega ~ category, data=df)
+#W = 2035460, p-value = 0.1913
+#tree-omega value is not significantly different for the different categories
+
+#trying a glm instead, to see if this is the same - still is non-sig 
+glm(tree_omega ~ factor(category), data = df, family = "Gamma")
+#Coefficients:
+#  (Intercept)  factor(category)non_immune  
+#4.7476                      0.6796  
+
+
+#testing to see if the distribution of codon length differs between categories
+wilcox.test(codon_length ~ category, data = df)
+#W = 1931511, p-value = 0.2567
+#not sig diff between the categories
+
+
+#is the tree-omega value associated with the gene length?
+omega_length <- glm(tree_omega ~ codon_length, data = df, family = "Gamma")
+summary(omega_length)
+#the interaction between tree-omega and gene length is significant
+#Coefficients:
+#  Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)  5.0614873  0.0951390  53.201  < 2e-16 ***
+#  codon_length 0.0004947  0.0001558   3.175  0.00151 ** 
+#AIC: -7892.6
+
+#is the tree_omega value associated with gene category and gene length?
+omega_length_category <- glm(tree_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df, family = "Gamma")
+summary(omega_length_category)
+
+#(Intercept)                              3.6100910  0.2322588  15.543  < 2e-16 ***
+#  factor(category)non_immune               1.7241640  0.2538640   6.792 1.23e-11 ***
+#  codon_length                             0.0025886  0.0004850   5.337 9.80e-08 ***
+#  factor(category)non_immune:codon_length -0.0024076  0.0005105  -4.716 2.46e-06 ***
+#AIC: -7932.9
+
+#is tree_omega value associated with gene category with gene length as a random effect
+omega_Rlength_category <- glmer(tree_omega ~ factor(category) + (1 | codon_length), data = df, family="Gamma")
+summary(omega_Rlength_category)
+
+#Estimate Std. Error t value Pr(>|z|)    
+#(Intercept)                  4.9586     0.1390  35.676  < 2e-16 ***
+#  factor(category)non_immune   0.6833     0.1423   4.802 1.57e-06 ***
+#AIC      BIC   logLik deviance df.resid 
+# -7946.4  -7919.9   3977.2  -7954.4     5491 
+
+AIC(omega_Rlength_category, omega_length_category) #higher AIC when random effect! very minorlyß
+
+##########transforming the data - log transformation
+
+df$tree_omega_log <- log(df$tree_omega)
+#tree_omega values
+ggplot(immune_df, aes(x=tree_omega_log)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=tree_omega_log)) + geom_histogram()
+
+shapiro.test(immune_df$tree_omega_log)
+shapiro.test(nonimmune_df$tree_omega_log)
+
+
+########anova testing
+#create nested models
+model8 <- glmer(tree_omega ~ factor(category) + (1 | codon_length), data = df, family="Gamma")
+model9 <- glm(tree_omega ~ factor(category), data = df, family="Gamma")
+
+anova(model8, model9) #p value is < 0.05 so conclude more complex model is better (model 8)
+
+drop1(model8, test="Chisq") #significance so keep category
+
+
+
+
+
+#-----------------------------------------------------------------------------
+#branch-omega category distribution
+#load packages
+library(ggplot2)
+library(dplyr)
+library(rcdd) #didnt work
+library(lme4) #glmer random effects package
+library(glm2) #glm2
+
+
+#set working directory
+setwd("~/Documents/coding_files/")
+
+#read in the mb dataframe
+df = read.csv("Sep6_MK_mb_PAML.csv", header=TRUE, sep=",", fill=TRUE)
+
+#first should remove the 999 omega values, as these are not reliable estimates
+df2 = subset(df, branch_mb_omega < 999)
+
+#need to see if it is normally distributed
+#create subsetted bits to look at distribution of the w2 in immune and non-immune categories
+immune_df = df2[df2$category == "immune",]
+nonimmune_df = df2[df2$category == "non_immune",]
+
+#carrying out a shapiro-wilk test for normality, already know that codon length is not normally distributed (Gamma distribution)
+#tree_omega
+shapiro.test(immune_df$branch_mb_omega) #W = 0.1522, p-value < 2.2e-16 = not normal
+shapiro.test(nonimmune_df$branch_mb_omega) #W = 0.037437, p-value < 2.2e-16 = not normal
+
+#visualising distributions, both look like a poisson distribution (Gamma for non count data) - extreme left skew as most are 0
+#tree_omega values
+ggplot(immune_df, aes(x=branch_mb_omega)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=branch_mb_omega)) + geom_histogram()
+
+#testing the if the distribution of the tree-omega values is identical between immune and non-immune genes
+#using a mann-whitney u test as the distribution is non-normal
+wilcox.test(branch_mb_omega ~ category, data=df2)
+#W = 1805464, p-value = 0.009342
+#omega value is  significantly different for the different categories!
+
+#trying a glm instead, to see if this is the same - says now it is non-sig 
+branch <- glm(branch_mb_omega ~ factor(category), data = df2, family = "Gamma"(link="identity"))
+summary(branch)
+
+#testing to see if the distribution of codon length differs between categories
+wilcox.test(codon_length ~ category, data = df)
+#W = 1665322, p-value = 0.2702 #df2
+#W = 1776178, p-value = 0.2926 #df
+#not sig diff between the categories
+
+#is the mb branch omega value associated with the gene length?
+omega_length <- glm(branch_mb_omega ~ codon_length, data = df2, family = Gamma)
+omega_length <- glm(branch_mb_omega ~ codon_length, data = df2, family = Gamma(link=log), na.action = na.exclude)
+
+omega_length <- glm(branch_mb_omega ~ codon_length, data = df2, family = "Gamma", start=c(0,1))
+summary(omega_length)
+#says that codon length does affect omega value
+
+#is the tree_omega value associated with gene category and gene length?
+omega_length_category <- glm(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, family="Gamma")
+summary(omega_length_category)
+
+#glm fit
+norm <- lm(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2)
+gID <- glm(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, family="Gamma"(link="identity"))
+
+gID_glmm <- glmer(branch_mb_omega ~ factor(category) + (1 | codon_length), data = df2, family="Gamma"(link="identity"))
+gID_glmm
+
+invgaus <- glm(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, family="inverse.gaussian")
+invgaus <- glm(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, family=gaussian(link=inverse))
+invgaus
+
+test <- anova(branch, gID, test="Chisq")
+test
+AIC(gID,norm)
+
+gID2 <- glm2(branch_mb_omega ~ factor(category) + codon_length + factor(category)*codon_length, data = df2, family="Gamma")
+glm2(branch_mb_omega ~ factor(category), data = df2, family="Gamma")
+glm2(branch_mb_omega ~ codon_length, data = df2, family="Gamma")
+##seeing what happens if I log these values
+df2$branch_mb_omega_log <- log(df2$branch_mb_omega)
+#branch_omega values now look more normal, but have still have one large separate left skew column
+ggplot(immune_df, aes(x=branch_mb_omega_log)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=branch_mb_omega_log)) + geom_histogram()
+#still giving non-normal values
+shapiro.test(immune_df$branch_mb_omega_log)
+shapiro.test(nonimmune_df$branch_mb_omega_log)
+
+
+##seeing what happens if I log these values
+df2$codon_length_log <- log(df2$codon_length)
+#branch_omega values now look more normal, but have still have one large separate left skew column
+ggplot(immune_df, aes(x=codon_length_log)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=codon_length_log)) + geom_histogram()
+#still giving non-normal values
+shapiro.test(immune_df$codon_length_log)
+shapiro.test(nonimmune_df$codon_length_log)
+
+df2$branch_mb_omega_log <- log(df2$branch_mb_omega)
+
+
+
+pos = df2[df2$branch_mb_omega > 5,]
+ggplot(pos, aes(x=branch_mb_omega)) + geom_histogram()
+ggplot(pos, aes(x=codon_length)) + geom_histogram()
+ggplot(df2, aes(x=codon_length)) + geom_histogram()
+
+low = df2[df2$branch_mb_omega < 5,]
+ggplot(low, aes(x=branch_mb_omega)) + geom_histogram()
+
+
+#looking at distribution of codon lengths for the positive gene
+
+
+###trying to find what R thinks the distribution is
+
+library(fitdistrplus)
+omega <- df2$branch_mb_omega
+codon <- df2$codon_length
+#shows you what distribution
+descdist(omega, discrete = FALSE)
+descdist(codon, discrete = FALSE)
+
+gamma = fitdist(omega, "gamma")
+plot(gamma)
+
+normal = fitdist(omega, "norm")
+plot(normal)
+
+gamma = fitdist(codon, "gamma")
+plot(gamma)
+
+normal = fitdist(codon, "norm")
+plot(normal)
+
+log_omega <- df2$branch_mb_omega_log
+descdist(log_omega, discrete=FALSE)
+normal = fitdist(log_omega, "norm")
+plot(normal)
+#can no longer do gamma as goes negaive
+gamma = fitdist(log_omega, "gamma")
+plot(gamma)
+
+
+#trying to just convert the codon_length colum from integer to numeric
+df2$codon_length <- as.numeric(df2$codon_length)
+str(df2$codon_length)
+#this does not work
+
+
+
+
+
+
+#######random effects, different link testing
+
+
+ggplot(df2, aes(branch_mb_omega, codon_length)) + geom_point()
+ggplot(df2, aes(branch_mb_omega, factor(category))) + geom_point()
+
+ggplot(df, aes(tree_omega, codon_length)) + geom_point()
+
+gID_glmm_gamma <- glmer(branch_mb_omega ~ factor(category) + (1 | codon_length), data = df2, family="Gamma") # gives error
+summary(gID_glmm_gamm)
+
+gID_glmm_gammainv <- glmer(branch_mb_omega ~ factor(category) + (1 | codon_length), data = df2, family="Gamma"(link="inverse")) #gives same error as same as above
+summary(gID_glmm_gamminv)
+
+gID_glmm_gammlog <- glmer(branch_mb_omega ~ factor(category) + (1 | codon_length), data = df2, family="Gamma"(link="log")) # 2 warnings
+summary(gID_glmm_gammlog) #says category is sig
+
+gID_glmm_gammid <- glmer(branch_mb_omega ~ factor(category) + (1 | codon_length), data = df2, family="Gamma"(link="identity")) # same two warnings as above
+summary(gID_glmm_gammid) #says category is sig
+
+gID_glmm_invgaus <- glmer(branch_mb_omega ~ factor(category) + (1 | codon_length), data = df2, family="gaussian"(link="inverse")) #same two warnings as above
+summary(gID_glmm_invgaus) # says category is sig
+
+AIC(gID_glmm_gammlog, gID_glmm_gammid, gID_glmm_invgaus)
+
+
+#look at the glm without gene length in it at all
+#trying a glm instead, to see if this is the same - says now it is non-sig 
+branch_gammid <- glm(branch_mb_omega ~ factor(category), data = df2, family = "Gamma"(link="identity"))
+summary(branch_gammid) #this says categiry is sig
+branch_gammlog <- glm(branch_mb_omega ~ factor(category), data = df2, family = "Gamma"(link="log")) #says does not converge!
+summary(branch_gammlog)
+branch_gamminv <- glm(branch_mb_omega ~ factor(category), data = df2, family = "Gamma"(link="inverse"))
+summary(branch_gamminv) #this says category is not sig
+branch_invgaus <- glm(branch_mb_omega ~ factor(category), data = df2, family = "gaussian"(link="inverse")) 
+summary(branch_invgaus) #this says category is not sig, nor is intercept
+AIC(branch_gammid, branch_gamminv, branch_gammlog, branch_invgaus)
+
+AIC(gID_glmm_gammlog, branch_gammlog)
+AIC(gID_glmm_gammid, branch_gammid)
+AIC(gID_glmm_invgaus, branch_invgaus)
+
+help(geom_tile)
+help(geom_raster)
+
+
+#################
+#doing this with myotis lucifugus
+#read in the mb dataframe
+df = read.csv("Sep30_ml_big.csv", header=TRUE, sep=",", fill=TRUE)
+df$codon_length_log <- log(df$codon_length)
+##seeing what happens if I log these values
+df$branch_mb_omega_log <- log(df$branch_mb_omega)
+
+#first should remove the 999 omega values, as these are not reliable estimates
+df2 = subset(df, branch_mb_omega < 999)
+
+#need to see if it is normally distributed
+#create subsetted bits to look at distribution of the w2 in immune and non-immune categories
+immune_df = df2[df2$category == "immune",]
+nonimmune_df = df2[df2$category == "non_immune",]
+
+#find the mean and median
+mean(immune_df$branch_mb_omega)
+median(immune_df$branch_mb_omega)
+mean(nonimmune_df$branch_mb_omega)
+median(nonimmune_df$branch_mb_omega)
+
+#carrying out a shapiro-wilk test for normality, already know that codon length is not normally distributed (Gamma distribution)
+#branch_omega - still called mb, but is ml
+shapiro.test(immune_df$branch_mb_omega) #W = 0.037084, p-value < 2.2e-16 = not normal
+shapiro.test(nonimmune_df$branch_mb_omega) #W = 0.03064, p-value < 2.2e-16 = not normal
+
+#visualising distributions, both look like a poisson distribution (Gamma for non count data) - extreme left skew as most are 0
+#tree_omega values
+ggplot(immune_df, aes(x=branch_mb_omega)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=branch_mb_omega)) + geom_histogram()
+ 
+#testing the if the distribution of the tree-omega values is identical between immune and non-immune genes
+#using a mann-whitney u test as the distribution is non-normal
+wilcox.test(branch_mb_omega ~ category, data=df2) #non-sig: W = 1736427, p-value = 0.2671
+
+#trying logged omega values
+#carrying out a shapiro-wilk test for normality, already know that codon length is not normally distributed (Gamma distribution)
+#branch_omega - still called mb, but is ml
+shapiro.test(immune_df$branch_mb_omega_log) #W = 0.76434, p-value < 2.2e-16 = not normal
+shapiro.test(nonimmune_df$branch_mb_omega_log) #W = 0.77435, p-value < 2.2e-16 = not normal
+
+#visualising distributions, both look like a poisson distribution (Gamma for non count data) - extreme left skew as most are 0
+#tree_omega values
+ggplot(immune_df, aes(x=branch_mb_omega_log)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=branch_mb_omega_log)) + geom_histogram()
+
+####
+#trying the codon length - codon length more just normal left skew data, presumably fixed with logging
+ggplot(immune_df, aes(x=codon_length)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=codon_length)) + geom_histogram()
+#still giving non-normal values
+shapiro.test(immune_df$codon_length) #W = 0.73539, p-value < 2.2e-16
+shapiro.test(nonimmune_df$codon_length) #W = 0.76928, p-value < 2.2e-16
+
+#branch_omega values now look more normal, but have still have one large separate left skew column
+ggplot(immune_df, aes(x=codon_length_log)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=codon_length_log)) + geom_histogram()
+#still giving non-normal values
+shapiro.test(immune_df$codon_length_log) #still not normal W = 0.9956, p-value = 0.02502
+shapiro.test(nonimmune_df$codon_length_log) #W = 0.99417, p-value = 3.256e-12
+
+
+
+
+#########
+#looking to see if codon length is statistically different between categories
+#set working directory
+setwd("~/Documents/coding_files/")
+#read in the mb dataframe
+df = read.csv("Sep6_MK_mb_PAML.csv", header=TRUE, sep=",", fill=TRUE)
+df$codon_length_log <- log(df$codon_length)
+immune_df = df[df$category == "immune",]
+nonimmune_df = df[df$category == "non_immune",]
+#check normality
+ggplot(immune_df, aes(x=codon_length)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=codon_length)) + geom_histogram()
+#still giving non-normal values
+shapiro.test(immune_df$codon_length) #W = 0.73389, p-value < 2.2e-16
+shapiro.test(nonimmune_df$codon_length)#W = 0.76809, p-value < 2.2e-16
+#still giving non-normal values
+shapiro.test(immune_df$codon_length_log) #W = 0.99662, p-value = 0.07995
+shapiro.test(nonimmune_df$codon_length_log)#W = 0.76809, p-value < 2.2e-16
+#codon length is not normal for each category, even when it is logged
+codon <- glm2(codon_length ~ factor(category), data = df, family="Gamma")
+summary(codon) #intercept is significant, but category is not
+#testing to see if the distribution of codon length differs between categories
+wilcox.test(codon_length ~ category, data = df) #W = 1776178, p-value = 0.2926
+#wilcox shows non-sig
+
+
+
+#-----------------------------------------------------------------------------------------------
+#immune category visuals (R)
+#load packages
+library(ggplot2)
+library(dplyr)
+
+#set working directory
+setwd("~/Documents/coding_scripts/myobr_myolu_genome_selection/Results/Immune_categories")
+
+#read in csv
+df = read.csv("category_PAML_output.csv", header=TRUE, sep=",", fill=TRUE)
+
+#change the categorical names so they look nice on a graph
+df$category[df$category == 'immune'] <- 'Immune'
+df$category[df$category == 'non_immune'] <- 'Non-immune'
+
+ggplot(df,                                      # Grouped barplot using ggplot2
+       aes(x = X0,
+           y = foregroundw2a,
+           fill = category)) +
+  geom_bar(stat = "identity",
+           position = "dodge") +
+  scale_x_discrete(guide = guide_axis(angle = 90))+
+  xlab("Gene") + 
+  ylab("dN/dS") +
+  labs(fill = "Gene set")
+
+ggplot(df,                                      # Grouped box using ggplot2
+       aes(x = category,
+           y = foregroundw2a,
+           fill = category)) +
+  geom_boxplot() +
+  xlab("Gene category") + 
+  ylab("dN/dS MLE of site class w2a") +
+  labs(fill = "Gene category")
+
+
+ggplot(df,                                      # Grouped barplot using ggplot2
+       aes(x = category,
+           y = foregroundw2a,
+           fill = category)) +
+  geom_dotplot(binaxis = 'y') +
+  xlab("Gene category") + 
+  ylab("dN/dS") +
+  labs(fill = "Gene category")
+
+ggplot(df,                                      # Grouped barplot using ggplot2
+       aes(x = category,
+           y = foregroundw2a,
+           fill = category)) +
+  geom_violin() +
+  xlab("Gene category") + 
+  ylab("dN/dS") +
+  labs(fill = "Gene category")
+
+ggplot(df,                                      # Grouped barplot using ggplot2
+       aes(x = X0,
+           y = foregroundw2a,
+           fill = category,
+           colour = factor(category))) +
+  geom_point() +
+  xlab("Gene category") + 
+  ylab("dN/dS") +
+  labs(fill = "Gene category")
+
+
+#looking at the distribution of the gene lengths
+ggplot(df,                                      # Grouped barplot using ggplot2
+       aes(x = category,
+           y = codon_length,
+           fill = category)) +
+  geom_boxplot() +
+  xlab("Gene category") + 
+  ylab("codon length") +
+  labs(fill = "Gene category")
+
+#look at gene lengths and dnds
+ggplot(df,
+       aes(x = codon_length,
+           y = foregroundw2a,
+           fill = category,
+           colour = factor(category))) +
+  geom_point()
+
+
+#need to see if it is normally distributed
+#create subsetted bits to look at distribution of the w2 in immune and non-immune categories
+immune_df = df[df$category == "immune",]
+nonimmune_df = df[df$category == "non_immune",]
+
+shapiro.test(immune_df$foregroundw2a) #W = 0.95463, p-value = 0.3179 = normal
+shapiro.test(nonimmune_df$foregroundw2a) #W = 0.95474, p-value = 0.0001169 = not normal
+
+ggplot(immune_df, aes(x=foregroundw2a)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=foregroundw2a)) + geom_histogram()
+
+shapiro.test(immune_df$codon_length) #W = 0.85554, p-value = 0.002248 = not normal
+shapiro.test(nonimmune_df$codon_length) #W = 0.84983, p-value = 8.171e-11 = not normal
+
+ggplot(immune_df, aes(x=codon_length)) + geom_histogram()
+ggplot(nonimmune_df, aes(x=codon_length)) + geom_histogram()
+
+#this is probably more poisson distributed
+####trying to write a glm
+fit <- glm(foregroundw2a ~ factor(category) + codon_length + factor(category)*codon_length, data = df)
+summary(fit)
+
+#trying poisson fit, but don't think this works better -  online says do not fit poisson to non-integer data (which the w2a)
+fit5 <- glm(foregroundw2a ~ factor(category) + codon_length + factor(category)*codon_length, data = df, family = "poisson")
+summary(fit5)
+
+fit2 <- glm(foregroundw2a ~ factor(category) -1 + codon_length + factor(category)*codon_length, data = df)
+summary(fit2)
+
+fit3 <- glm(foregroundw2a ~ factor(category), data = df)
+summary(fit3)
+
+fit4 <- glm(foregroundw2a ~ factor(category) -1, data = df)
+summary(fit4)
+
+#t-tests instead
+#w and category
+t.test(df$foregroundw2a ~ df$category)
+#this t-test shows non significant difference in w value between the two categories
+
+#linear model for  w and codon length
+summary(lm(foregroundw2a ~ codon_length, data=df))
+
+###normal distribution
+shapiro.test()
