@@ -1,0 +1,109 @@
+#####Selecting the longest gene variants from the genome
+#need packages rebus, dplyr, stringr
+library(rebus)
+library(dplyr)
+library(stringr)
+
+#load a fai file, linked to your translated genome (will have already cut out transcripts with stop codons ect)
+#CHANGE FILENAME TO APPROPRIATE
+spp_CDS.fai <- read.table("Documents/coding_files/gff_wrangling/gfftest_rouAeg_Ntest.faa.fai", header=FALSE)
+View(spp_CDS.fai)
+#change name of mRNA column (V1) to "mRNA"
+names(spp_CDS.fai)[1] <- "mRNA"
+
+#load gff file, trimmed to get rid of all of the lines that start with a #
+#CHANGE FILENAME TO APPROPRIATE
+spp.gff <- read.table("Documents/coding_files/gff_wrangling/trimmed_rouAeg.gff", header=FALSE, sep = "\t")
+View(spp.gff)
+
+#filter only the mRNAs from the gff
+spp_mRNA.gff <- spp.gff %>%
+  filter(spp.gff$V3 == "mRNA")
+View(spp_mRNA.gff)
+
+#splitting up the gff description column - simplify puts in cols
+CDS_describers <- str_split(spp_mRNA.gff$V9, pattern = fixed(";"), simplify = TRUE, n = 4)
+CDS_describers
+#add in gene_id_variant column
+spp_mRNA.gff <- spp_mRNA.gff %>%
+  mutate(gene_id_variant = CDS_describers[,4])
+
+#write pattern to locate where the gene descriptors are
+gene_ID_pattern <- capture(one_or_more(WRD)) %R% 
+  "_id=" %R% capture(one_or_more(char_class(ASCII_ALNUM %R% ":._%+-"))) %R% 
+  "_x" %R% capture(one_or_more(WRD))
+
+gene_ID_split <- str_match(spp_mRNA.gff$gene_id_variant, pattern = gene_ID_pattern) 
+gene_ID_split
+
+#put parent gene in its own column
+spp_mRNA.gff <- spp_mRNA.gff %>%
+  mutate(gene_id = gene_ID_split[,3])
+
+
+#checking that there isn't anything odd at the end of each accession before 
+variants <- str_sub(spp_mRNA.gff$gene_id_variant, -3, -1)
+table(variants)
+
+##getting the mRNA in a column
+#add a column for mRNA with geneid=
+spp_mRNA.gff <- spp_mRNA.gff %>%
+  mutate(mRNA_id = CDS_describers[,1])
+
+#pattern to separate geneid= from the mRNA
+mRNA_id_pattern <- capture(one_or_more(WRD)) %R%
+  "D=" %R% capture(one_or_more(WRD))
+
+#separate out the geneid and mRNA
+mRNA_ID_split <- str_match(spp_mRNA.gff$mRNA_id, pattern = mRNA_id_pattern)
+mRNA_ID_split
+
+#add in the mRNA only column
+spp_mRNA.gff <- spp_mRNA.gff %>%
+  mutate(mRNA = mRNA_ID_split[,3])
+
+##joining the the gff table with the fai table
+gff_fai_joined <- spp_mRNA.gff %>%
+  inner_join(spp_CDS.fai, by = "mRNA")
+#gets rid of mRNAs that are not matched - this is good bc probably not in fai file bc probably removed by the gffread arguments
+View(gff_fai_joined)
+
+##filtering to include only the longest transcripts per gene
+#create table with only the longest transcript parent gene name and seq length
+spp_max.gff <- aggregate(V2.y ~ gene_id, gff_fai_joined, max)
+View(spp_max.gff)
+
+#merge with CDS_gff
+spp_final.gff <- merge(spp_max.gff, gff_fai_joined)
+View(spp_final.gff)
+
+##now to deal with the the extra variants that have been kept in as they have exactly the same length (so no max), or slipped through as they have geneB names
+#this only gets rid of the variants with exactly the same start and stop positions, and the same length
+#add in empty column
+spp_final.gff['hidden_variant'] <- NA
+
+for (i in 1:(nrow(spp_final.gff)-1)) {
+  if((spp_final.gff[i, 6] == spp_final.gff[i + 1, 6]) & (spp_final.gff[i, 7] == spp_final.gff[i + 1, 7]) & (spp_final.gff[i, 2] == (spp_final.gff[i + 1, 2])))  {
+    spp_final.gff[i + 1, 18] = "REMOVE"
+  } 
+}
+
+table(spp_final.gff$hidden_variant)  
+
+spp_final_final.gff <- filter(spp_final.gff, hidden_variant != "REMOVE" | is.na(hidden_variant))
+
+View(spp_final_final.gff) 
+
+#there are a couple of repeats still (molMol) - see ACHE (same length and gene variant, but different slightly different start/stop)
+
+##now need to extract the mRNA numbers
+#need to put mRNA column into a line deliminated file (different mRNA on each line)
+mRNA_genes <- spp_final_final.gff$mRNA
+View(mRNA_genes)
+
+#CHANGE .TSV TO MATCH SPP NAME
+write.table(mRNA_genes, file="Documents/coding_files/gff_wrangling/final_genome_mRNAs/rouAeg_genome_mRNA.tsv", sep=",", row.names = FALSE, quote=FALSE, col.names = FALSE)
+
+#in the server, can use the mRNA file to extract sequences from transcripts file (gff_molMol_Ntest) using this command:
+#seqtk subseq gfftest_molMol_Ntest.faa test.mRNA2 > test.out
+
