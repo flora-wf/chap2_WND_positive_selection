@@ -1,0 +1,105 @@
+#need packages rebus, dplyr, stringr
+#fai file with CDS lengths
+molMol_CDS.fai <- read.table("Documents/coding_files/gff_wrangling/molMol_100_CDS.faa.fai.txt", header=FALSE)
+View(molMol_CDS.fai)
+names(molMol_CDS.fai)
+#change name of mRNA column (V1) to "mRNA"
+names(molMol_CDS.fai)[1] <- "mRNA"
+
+
+molMolgff <- read.table("Documents/coding_files/gff_wrangling/100molMol.gff.tdf.txt", header=FALSE)
+View(molMolgff)
+
+#filter only the mRNAs 
+molMolgff2 <- molMolgff %>%
+  filter(molMolgff$V3 == "mRNA")
+
+#create column seq_length 
+molMolgff2 <- molMolgff2 %>%
+  mutate(seq_length = (molMolgff2$V5 - molMolgff2$V4))
+View(molMolgff2)
+
+
+#splitting up the gff description column - simplify puts in cols
+genes <- str_split(molMolgff2$V9, pattern = fixed(";"), simplify = TRUE, n = 4) 
+genes[,4]
+
+CDS_describers <- str_split(molMolgff2$V9, pattern = fixed(";"), simplify = TRUE, n = 4)
+CDS_describers
+#add in gene_id variant column
+molMolgff2 <- molMolgff2 %>%
+  mutate(gene_id_variant = CDS_describers[,4])
+
+#write pattern to locate where the gene descriptors are
+gene_ID_pattern <- capture(one_or_more(WRD)) %R% 
+  "_id=" %R% capture(one_or_more(WRD)) %R% 
+  "_x" %R% capture(one_or_more(WRD))
+str_match(molMolgff2$gene_id_variant, pattern = gene_ID_pattern) 
+bits <- str_match(molMolgff2$gene_id_variant, pattern = gene_ID_pattern) 
+bits[,3]
+
+molMolgff2 <- molMolgff2 %>%
+  mutate(gene_id = bits[,3])
+
+###getting the mRNA in a column
+#add a column for mRNA with geneid=
+molMolgff2 <- molMolgff2 %>%
+  mutate(mRNA_id = CDS_describers[,1])
+
+#pattern to separate geneid= from the mRNA
+mRNA_id_pattern <- capture(one_or_more(WRD)) %R%
+  "D=" %R% capture(one_or_more(WRD))
+
+#separate out the geneid and mRNA
+mRNA_bits <- str_match(molMolgff2$mRNA_id, pattern = mRNA_id_pattern)
+mRNA_bits
+
+#add in the mRNA only column
+molMolgff2 <- molMolgff2 %>%
+  mutate(mRNA = mRNA_bits[,3])
+
+##joining the the gff table with the fai table
+#
+gff_fai_joined <- molMolgff2 %>%
+  inner_join(molMol_CDS.fai, by = "mRNA")
+#gets rid of mRNAs that are not matched - this is good bc probably not in fai file bc probably removed by the gffread arguments
+View(gff_fai_joined)
+##############
+ 
+molMolgff2_max <- aggregate(V2.y ~ gene_id, gff_fai_joined, max)
+#gives df with only gene id (max seq length only) and max seq_length
+View(molMolgff2_max)
+#merge the two
+molMolgff2_final <- merge(molMolgff2_max, gff_fai_joined)
+#does not give the largest one, repeats the pattern of the max for every single line (so *4)
+View(molMolgff2_final)
+
+#need to put mRNA column into a line deliminated file (different mRNA on each line)
+mRNA_genes <- molMolgff2_final$mRNA
+View(mRNA_genes)
+
+write.table(mRNA_genes, file="Documents/coding_files/gff_wrangling/mRNA_genes4.tsv", sep=",", row.names = FALSE, quote=FALSE, col.names = FALSE)
+
+#in the server, can use the mRNA file to extract sequences from transcripts file (gff_molMol_Ntest) using this command:
+#seqtk subseq gfftest_molMol_Ntest.faa test.mRNA2 > test.out
+#
+###
+
+
+##############
+
+#view only the start points
+View(molMolgff$V4)
+
+#extracting substrings
+str_sub(molMolgff2$V9, 4, 8)
+str_split(molMolgff2$V9, pattern = fixed(";"))
+
+
+#create table with just genes instead of mRNA
+molMolgff3 <- molMolgff %>%
+  filter(molMolgff$V3 == "gene")
+molMolgff3 <- molMolgff3 %>%
+  mutate(seq_length = (molMolgff3$V5 - molMolgff3$V4))
+View(molMolgff3)
+
