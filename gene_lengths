@@ -1,0 +1,98 @@
+#getting out the gene lengths
+#using the myobra output files for this
+cd ~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/
+
+#make directory to put gene lengths in them
+mkdir grep_lengths
+
+#cd into the branch site directory
+cd branch_site
+
+for i in *site.txt; do
+grep 'ls =' ${i} > ../grep_lengths/${i}.length;
+sed -i -e 's/\s\+/,/g' ../grep_lengths/${i}.length;
+done
+
+#first make sure there are no empty files, as the python script will break if there are.
+#find empty files in the grep_table and grep_lnL directories
+cd ../grep_lengths
+find -type f -empty
+
+#get a file with all the names, so I can call all of them with different names
+#already have this file from before (../file_names)
+
+#move back into the base file for the spp
+cd ..
+#create file for dictionary start file to go
+touch proto_dict2
+
+#loop around the lines in the file_name file, so i is each chrom name. Creates file in a good format to create the dictionary from
+for i in $(cat file_names); do
+echo '["grep_lengths/'${i}'_branch_site.txt.length"]' >> proto_dict2;
+done
+
+#create base file to append onto
+cat > base2.csv
+gene,length
+
+#go into python
+python
+#set package
+import pandas as pd
+
+#read in file with chrom names in 
+names = pd.read_csv("file_names", header=None)
+#read in the created proto_dict file
+proto = pd.read_csv("proto_dict2", header=None, sep='\t')
+#join together
+df = pd.concat([names, proto], axis=1)
+#name the columns
+df.columns = ["name", "list"]
+#change so values will be treated separately (allows the creation of the dictionary)
+df['list'] = df['list'].apply(eval)
+#create dictionary
+dictionary = dict(zip(df.name, df.list))
+
+#read in base file to put the data into
+base = pd.read_csv("base2.csv", delimiter=',', header='infer')
+
+#read each 
+for key,value in dictionary.items():
+	len_file = value[0]
+	len_no = pd.read_csv(len_file, header=None)
+	base = base.append({'gene':key, 'length':len_no.iat[0,5]},ignore_index=True)
+	
+base['gene'] = base['gene'].astype(str) + ".1"
+
+base.to_csv("gene_lengths.csv", header=True, index=False)
+
+#exit python and move to the Results folder
+cd ~/Datafiles/Bats/GCF_rerun_0821/Results/PAML
+
+#open up python again
+python
+import pandas as pd
+
+#open both dataframes, using both the gene numbers as the index column
+lengths = pd.read_csv("~/Datafiles/Bats/GCF_rerun_0821/PAML_pub59/selection_tests/myobra_forward/gene_lengths.csv", header='infer', index_col=0)
+df = pd.read_csv("category_PAML_output.csv", header='infer', index_col=1)
+
+#merge on the index of both 
+total = pd.merge(df, lengths, left_index=True, right_index=True)
+
+#rename column to specify length is the number of codons
+total.rename(columns={'length':'codon_length'}, inplace=True)
+#add in the nucleotide length too
+total['nuc_length'] = total['codon_length']*3
+
+#save out the dataframe to replace the old one
+total.to_csv("category_PAML_output.csv", index=True, header=True)
+
+
+
+
+
+
+
+
+
